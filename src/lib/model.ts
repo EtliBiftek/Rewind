@@ -63,6 +63,11 @@ export class Match {
   constructor(demo: DemoData, buf: ArrayBuffer) {
     this.demo = demo;
     const fm = demo.frames;
+    if (!demo.rounds?.length) {
+      // defensive: a demo without round data still needs one pseudo round to play back
+      const last = fm.startTick + Math.max(0, fm.frameCount - 1) * (fm.sampleInterval || 4);
+      demo.rounds = [{ number: 1, startTick: fm.startTick, freezeEndTick: fm.startTick, endTick: last, officialEndTick: last, winner: null, endReason: "unknown", teamSides: ["CT", "T"], scoreBefore: [0, 0], buyTypes: ["full", "full"], equipValues: [0, 0], bombPlantedTick: null, bombSite: null }];
+    }
     this.frames = new Float32Array(buf);
     this.pc = fm.playerCount;
     this.stride = fm.stride || 12;

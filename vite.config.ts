@@ -4,7 +4,7 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
-  server: { port: 1420, strictPort: true, host: "127.0.0.1" },
-  preview: { port: 1420, strictPort: true, host: "127.0.0.1" },
+  server: { port: 1420, strictPort: true },
+  preview: { port: 1420, strictPort: true },
   build: { outDir: "dist", target: "es2022", chunkSizeWarningLimit: 2000 },
 });

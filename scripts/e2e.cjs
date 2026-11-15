@@ -457,6 +457,29 @@ function makePng(w, h, paint) {
     await page.locator(".modal.export .btn >> text=Kapat").click();
   });
 
+
+  await step("start screen: progress while loading, error display, retry", async () => {
+    const p2 = await ctx.newPage();
+    let mode = "slow";
+    await p2.route("**/fixtures/demo.json", async (route) => {
+      if (mode === "slow") { await new Promise((r) => setTimeout(r, 1500)); return route.continue(); }
+      return route.fulfill({ status: 500, body: "boom" });
+    });
+    await p2.goto(`http://127.0.0.1:${PORT}/`);
+    await p2.waitForSelector(".loading", { timeout: 5000 });
+    assert(/yükleniyor|okunuyor/i.test(await p2.locator(".loading").innerText()), "progress text shown");
+    await p2.screenshot({ path: path.join(OUT, "start-loading.png") });
+    await p2.waitForSelector(".topbar", { timeout: 30000 });
+    // error path
+    mode = "fail";
+    await p2.goto(`http://127.0.0.1:${PORT}/?x=1`);
+    await p2.waitForSelector(".error", { timeout: 15000 });
+    const t = await p2.locator(".error").innerText();
+    assert(/Demo yüklenemedi/.test(t), "error title: " + t);
+    await p2.screenshot({ path: path.join(OUT, "start-error.png") });
+    await p2.close();
+  });
+
   if (FINAL) await finalShots(page, shot, setS, st, clickText);
 
   await step("no console errors", async () => {
