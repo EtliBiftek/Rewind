@@ -62,6 +62,8 @@ pub struct RawFrames {
     pub by_key: HashMap<PlayerKey, Vec<Sample>>,
     pub names: HashMap<PlayerKey, String>,
     pub clan: HashMap<PlayerKey, HashMap<String, usize>>,
+    /// rows where the controller was flagged as a coach
+    pub coach_rows: HashMap<PlayerKey, usize>,
     pub rules: Vec<Rules>,
     pub places: Vec<String>,
     pub weapons: Vec<String>,
@@ -187,6 +189,7 @@ pub fn build_raw_frames(t: &Table, interval: i32) -> RawFrames {
             by_key: HashMap::new(),
             names: HashMap::new(),
             clan: HashMap::new(),
+            coach_rows: HashMap::new(),
             rules: vec![],
             places: vec![String::new()],
             weapons: vec![],
@@ -198,6 +201,7 @@ pub fn build_raw_frames(t: &Table, interval: i32) -> RawFrames {
     let mut by_key: HashMap<PlayerKey, Vec<Sample>> = HashMap::new();
     let mut names = HashMap::new();
     let mut clan: HashMap<PlayerKey, HashMap<String, usize>> = HashMap::new();
+    let mut coach_rows: HashMap<PlayerKey, usize> = HashMap::new();
     let mut rules = vec![Rules::default(); frame_count];
     let mut places = Interner::new(Some(""));
     let mut weapons = Interner::new(None);
@@ -217,6 +221,7 @@ pub fn build_raw_frames(t: &Table, interval: i32) -> RawFrames {
         c("is_connected"),
         c("last_place_name"),
     );
+    let ccoach = c("is_coach_team");
     let (cwarm, cfreeze, crp, cscore, cclan) = (
         c("is_warmup_period"),
         c("is_freeze_period"),
@@ -241,6 +246,9 @@ pub fn build_raw_frames(t: &Table, interval: i32) -> RawFrames {
             names.entry(key.clone()).or_insert_with(|| nm.to_string());
         }
         let team = num(&cteam, r).unwrap_or(0.0) as u8;
+        if num(&ccoach, r).unwrap_or(0.0) != 0.0 {
+            *coach_rows.entry(key.clone()).or_default() += 1;
+        }
         // game rules (same for every row of a tick)
         let rl = &mut rules[f];
         if !rl.present {
@@ -351,6 +359,7 @@ pub fn build_raw_frames(t: &Table, interval: i32) -> RawFrames {
         by_key,
         names,
         clan,
+        coach_rows,
         rules,
         places: places.list,
         weapons: weapons.list,

@@ -114,7 +114,15 @@ fn summary(args: &[String]) -> Result<(), String> {
         }
     }
     let tn = |t: usize| d.players.iter().find(|p| p.team as usize == t).map(|p| p.team_name.clone()).unwrap_or_default();
-    println!("score: {} {} - {} {}  ({} rounds)", tn(0), score[0], score[1], tn(1), d.rounds.len());
+    println!(
+        "score: {} {} - {} {}  ({} rounds){}",
+        tn(0),
+        score[0],
+        score[1],
+        tn(1),
+        d.rounds.len(),
+        loaded.game_final_score.map(|g| format!(" | in-game final score {}-{}{}", g[0], g[1], if g == score { " OK" } else { " MISMATCH" })).unwrap_or_default()
+    );
     println!("rounds: {}", d.rounds.iter().map(|r| format!("{}{}", r.number, match r.winner { Some(w) if r.team_sides[0] == w => "a", Some(_) => "b", None => "?" })).collect::<Vec<_>>().join(" "));
     println!();
     println!("{:<22} {:>4} {:>3} {:>3} {:>3} {:>6} {:>5} {:>5} {:>4} {:>4} {:>5} {:>5} {:>5}  sub-scores", "player", "team", "K", "D", "A", "ADR", "KAST", "HS%", "OK", "OD", "rat", "score", "acc");

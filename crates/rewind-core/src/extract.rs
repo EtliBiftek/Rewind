@@ -101,6 +101,7 @@ pub const TICK_PROPS: &[&str] = &[
     "total_rounds_played",
     "team_rounds_total",
     "team_clan_name",
+    "is_coach_team",
 ];
 
 #[derive(Debug, Clone)]

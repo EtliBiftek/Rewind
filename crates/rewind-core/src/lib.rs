@@ -15,6 +15,24 @@ pub use model::DemoData;
 
 use std::path::Path;
 
+/// Human readable (Turkish) label for a progress stage id.
+pub fn stage_label(stage: &str) -> &'static str {
+    match stage {
+        "read" => "Dosya okunuyor",
+        "parse" => "Demo ayrıştırılıyor",
+        "events" => "Oyun olayları okunuyor",
+        "positions" => "Oyuncu konumları okunuyor",
+        "grenades" => "Bombalar işleniyor",
+        "parsed" => "Veriler derleniyor",
+        "rounds" => "Raundlar belirleniyor",
+        "frames" => "Kareler hazırlanıyor",
+        "voice" => "Ses kayıtları hazırlanıyor",
+        "analysis" => "Analiz yapılıyor",
+        "done" => "Tamamlandı",
+        _ => "İşleniyor",
+    }
+}
+
 /// Everything produced by loading one demo.
 pub struct LoadedDemo {
     pub data: DemoData,
@@ -22,6 +40,8 @@ pub struct LoadedDemo {
     pub voice: voice::VoiceStore,
     /// Successful grenades of this demo, to be merged into the persistent lineup library.
     pub learned_lineups: Vec<lineups::Lineup>,
+    /// Final score as stored in the game's team entities (indexed by constant team), for verification.
+    pub game_final_score: Option<[u32; 2]>,
 }
 
 impl LoadedDemo {
@@ -64,7 +84,7 @@ pub fn load_bytes(
     };
     let (data, learned) = analysis::analyze(built.data, &built.frames, &built.extra, lib);
     progress("done", 1.0);
-    Ok(LoadedDemo { data, frames: built.frames, voice: built.voice, learned_lineups: learned })
+    Ok(LoadedDemo { data, frames: built.frames, voice: built.voice, learned_lineups: learned, game_final_score: built.extra.final_score_from_game })
 }
 
 /// Loads a demo file (memory-mapped).

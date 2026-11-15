@@ -151,8 +151,22 @@ fn detect_rounds(events: &[Ev], raw: &RawFrames, last_tick: i32) -> Vec<RoundDra
             }
         }
         let lo = prev_end.max(i32::MIN + 1);
-        let freeze_end = match last_in(&freezes, lo, e.tick) {
-            Some(f) => f.tick,
+        // older demos have no round_freeze_end event: fall back to the game rules' freeze flag
+        let rules_freeze_end = || -> Option<i32> {
+            let st = last_in(&starts, lo, e.tick)?.tick;
+            let mut t = st;
+            while t < e.tick {
+                if let Some(r) = rules_at(t) {
+                    if r.present && !r.freeze && t > st {
+                        return Some(t);
+                    }
+                }
+                t += raw.interval.max(1);
+            }
+            None
+        };
+        let freeze_end = match last_in(&freezes, lo, e.tick).map(|f| f.tick).or_else(rules_freeze_end) {
+            Some(f) => f,
             None => {
                 // demo started mid-round (or restart without freeze time): skip partial round
                 prev_end = e.tick;
@@ -450,6 +464,20 @@ pub fn build(raw: RawDemo, file_name: &str, progress: &(dyn Fn(&str, f32) + Sync
     }
     // drop keys that never moved / never were alive in rounds (coaches parked as spectators etc.)
     participants.retain(|k| rawf.by_key.get(k).map(|v| v.iter().any(|s| s.alive())).unwrap_or(false));
+    // coaches (controller flagged as coaching) and "ghosts" that never fired, hurt or got hurt
+    let mut active: HashSet<PlayerKey> = HashSet::new();
+    for e in events.iter().filter(|e| matches!(e.name.as_str(), "weapon_fire" | "player_hurt" | "player_death")) {
+        for pre in ["user", "attacker"] {
+            if let Some(k) = PlayerKey::new(e.steamid(pre), e.pname(pre)) {
+                active.insert(k);
+            }
+        }
+    }
+    participants.retain(|k| {
+        let rows = rawf.by_key.get(k).map(|v| v.iter().filter(|s| s.present).count()).unwrap_or(0).max(1);
+        let coach = rawf.coach_rows.get(k).copied().unwrap_or(0);
+        coach * 2 < rows && (active.is_empty() || active.contains(k))
+    });
 
     // constant team assignment: team 0 = side CT in the first round
     let mut team_of: HashMap<PlayerKey, u8> = HashMap::new();
@@ -1139,7 +1167,43 @@ pub fn build(raw: RawDemo, file_name: &str, progress: &(dyn Fn(&str, f32) + Sync
     // ---- frames: bomb carrier / planting / flash remaining --------------------------------------
     progress("frames", 0.9);
     {
-        let mut carrier: Option<usize> = None;
+        // bomb carrier intervals; a drop/plant by a player whose pickup we never saw (bomb given at
+        // spawn after a restart) is back-filled to the start of that carry.
+        let mut carrier_iv: Vec<(i32, i32, usize)> = vec![];
+        for (ri, r) in rounds.iter().enumerate() {
+            let next = rounds.get(ri + 1).map(|n| n.start_tick).unwrap_or(i32::MAX);
+            let mut cur: Option<(usize, i32)> = None;
+            let mut free_since = r.start_tick;
+            for b in bomb_events.iter().filter(|b| b.tick >= r.start_tick && b.tick < next) {
+                match (b.kind.as_str(), b.player) {
+                    ("pickup", Some(p)) => {
+                        if let Some((c, st)) = cur.take() {
+                            carrier_iv.push((st, b.tick, c));
+                        }
+                        cur = Some((p, b.tick));
+                    }
+                    ("drop" | "planted" | "plant_begin", Some(p)) => {
+                        let start = match cur {
+                            Some((c, st)) if c == p => st,
+                            _ => free_since,
+                        };
+                        if b.kind == "plant_begin" {
+                            cur = Some((p, start));
+                        } else {
+                            carrier_iv.push((start, b.tick, p));
+                            cur = None;
+                            free_since = b.tick;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some((c, st)) = cur {
+                carrier_iv.push((st, next.min(r.official_end_tick.max(r.end_tick) + 64), c));
+            }
+        }
+        carrier_iv.sort();
+        let mut carrier: Option<usize>;
         let mut planting: Option<usize> = None;
         let mut bi = 0usize;
         let bevs: Vec<&BombEvent> = bomb_events.iter().collect();
@@ -1151,18 +1215,14 @@ pub fn build(raw: RawDemo, file_name: &str, progress: &(dyn Fn(&str, f32) + Sync
         for f in 0..fs.frame_count {
             let tick = fs.tick_of(f);
             while round_i < rounds.len() && rounds[round_i].start_tick <= tick {
-                carrier = None;
                 planting = None;
                 round_i += 1;
             }
+            carrier = carrier_iv.iter().find(|(a, b, _)| *a <= tick && tick < *b).map(|x| x.2);
             while bi < bevs.len() && bevs[bi].tick <= tick {
                 let b = bevs[bi];
                 match b.kind.as_str() {
-                    "pickup" => carrier = b.player,
-                    "drop" | "planted" => {
-                        carrier = None;
-                        planting = None;
-                    }
+                    "drop" | "planted" => planting = None,
                     "plant_begin" => planting = b.player,
                     "plant_abort" => planting = None,
                     _ => {}
@@ -1172,7 +1232,7 @@ pub fn build(raw: RawDemo, file_name: &str, progress: &(dyn Fn(&str, f32) + Sync
             while blind_i < sorted_blinds.len() && sorted_blinds[blind_i].tick <= tick {
                 let b = sorted_blinds[blind_i];
                 let (st, du) = flash_until[b.victim];
-                let rem_old = du - (b.tick - st) as f32 / TICK_RATE;
+                let rem_old = if st == i32::MIN { 0.0 } else { du - (b.tick as i64 - st as i64) as f32 / TICK_RATE };
                 if b.duration > rem_old {
                     flash_until[b.victim] = (b.tick, b.duration);
                 }
