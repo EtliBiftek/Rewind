@@ -3,6 +3,8 @@
 //!   rewind-cli export <demo.dem> --out <dir> [--library <lineups.json>]
 //!   rewind-cli summary <demo.dem> [--insights N] [--round R]
 //!   rewind-cli learn <out_seed.json> <demo.dem>...      (builds the bundled seed lineup library)
+//!   rewind-cli map-export <map> [--cs2 <game/csgo or CS2 folder>] --out <file.glb> [--quality low|medium|high] [--textures ktx2|image] [--no-props]
+//!   rewind-cli map-info [<map>] [--cs2 <path>]          (install discovery, maps, and per-map scene numbers)
 
 use rewind_core::lineups::{LibraryFile, LineupLibrary};
 use rewind_core::{load_file, LoadOptions};
@@ -12,7 +14,7 @@ use std::time::Instant;
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage:\n  rewind-cli export <demo.dem> --out <dir> [--library <lineups.json>]\n  rewind-cli summary <demo.dem> [--insights N] [--round R]\n  rewind-cli learn <out_seed.json> <demo.dem>..."
+        "usage:\n  rewind-cli export <demo.dem> --out <dir> [--library <lineups.json>]\n  rewind-cli summary <demo.dem> [--insights N] [--round R]\n  rewind-cli learn <out_seed.json> <demo.dem>...\n  rewind-cli map-export <map> [--cs2 <path>] --out <file.glb> [--quality low|medium|high] [--textures ktx2|image] [--no-props]\n  rewind-cli map-info [<map>] [--cs2 <path>]"
     );
     ExitCode::from(2)
 }
@@ -28,6 +30,8 @@ fn main() -> ExitCode {
         "export" => export(&args[1..]),
         "summary" => summary(&args[1..]),
         "learn" => learn(&args[1..]),
+        "map-export" => map_export(&args[1..]),
+        "map-info" => map_info(&args[1..]),
         _ => return usage(),
     };
     match res {
@@ -213,5 +217,79 @@ fn learn(args: &[String]) -> Result<(), String> {
     eprintln!("seed: {} lineups (support >= {min_support}): {:?}", lib.lineups.len(), by_map);
     let json = serde_json::to_string(&lib).map_err(|e| e.to_string())?;
     std::fs::write(out, json).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn cs2_dir(args: &[String]) -> Result<PathBuf, String> {
+    match arg_value(args, "--cs2") {
+        Some(p) => rewind_assets::steam::resolve_user_path(Path::new(&p)).ok_or_else(|| format!("not a CS2 install: {p}")),
+        None => rewind_assets::steam::discover().ok_or_else(|| "CS2 not found (use --cs2 <path> or REWIND_CS2_PATH)".to_string()),
+    }
+}
+
+fn export_opts(args: &[String]) -> Result<rewind_assets::ExportOptions, String> {
+    let quality = match arg_value(args, "--quality") {
+        Some(q) => rewind_assets::Quality::parse(&q).ok_or_else(|| format!("bad --quality {q}"))?,
+        None => rewind_assets::Quality::Medium,
+    };
+    let textures = match arg_value(args, "--textures").as_deref() {
+        None | Some("ktx2") => rewind_assets::TexFormat::Ktx2,
+        Some("image") | Some("png") => rewind_assets::TexFormat::Image,
+        Some(o) => return Err(format!("bad --textures {o}")),
+    };
+    Ok(rewind_assets::ExportOptions { quality, textures, entity_props: !args.iter().any(|a| a == "--no-props") })
+}
+
+fn print_stats(st: &rewind_assets::ExportStats) {
+    eprintln!(
+        "  nodes={} sceneObjects={} aggregateFragments={} entityProps={} hiddenLayerObjects={} lodSkipped={}\n  models={} (missing {}) materials={} (skipped {}) textures={} (failed {}) texGPU={:.1} MB texFile={:.1} MB\n  batches(draw calls)={} vertices={} triangles={} glb={:.1} MB time={} ms",
+        st.world_nodes, st.scene_objects, st.aggregate_fragments, st.entity_props, st.hidden_layer_objects, st.lod_skipped_fragments,
+        st.models, st.models_missing, st.materials, st.materials_skipped, st.textures, st.textures_failed,
+        st.texture_gpu_bytes as f64 / 1048576.0, st.texture_file_bytes as f64 / 1048576.0,
+        st.batches, st.vertices, st.triangles, st.glb_bytes as f64 / 1048576.0, st.millis
+    );
+    eprintln!("  layers: {:?}", st.layers);
+    eprintln!("  shaders: {:?}", st.shaders.iter().take(16).collect::<Vec<_>>());
+    for w in st.warnings.iter().take(12) {
+        eprintln!("  warning: {w}");
+    }
+}
+
+fn map_export(args: &[String]) -> Result<(), String> {
+    let map = args.first().filter(|a| !a.starts_with("--")).ok_or("missing map name")?;
+    let out = PathBuf::from(arg_value(args, "--out").ok_or("missing --out <file.glb>")?);
+    let dir = cs2_dir(args)?;
+    let opts = export_opts(args)?;
+    let game = rewind_assets::Game::open(&dir).map_err(|e| e.to_string())?;
+    let prog = |stage: &str, pct: f32| progress(stage, pct);
+    let ex = rewind_assets::export_map(&game, map, &opts, &prog).map_err(|e| e.to_string())?;
+    if let Some(p) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(p).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&out, &ex.glb).map_err(|e| e.to_string())?;
+    eprintln!("{map} -> {} ({} bytes) from {}", out.display(), ex.glb.len(), dir.display());
+    print_stats(&ex.stats);
+    Ok(())
+}
+
+fn map_info(args: &[String]) -> Result<(), String> {
+    eprintln!("steam roots: {:?}", rewind_assets::steam::steam_roots());
+    let dir = cs2_dir(args)?;
+    eprintln!("cs2 game/csgo: {}", dir.display());
+    let maps = rewind_assets::Game::list_maps(&dir);
+    eprintln!("maps ({}): {}", maps.len(), maps.iter().map(|m| m.name.as_str()).collect::<Vec<_>>().join(" "));
+    if let Some(map) = args.first().filter(|a| !a.starts_with("--")) {
+        let game = rewind_assets::Game::open(&dir).map_err(|e| e.to_string())?;
+        let opts = export_opts(args)?;
+        let prog = |stage: &str, pct: f32| progress(stage, pct);
+        let ex = rewind_assets::export_map(&game, map, &opts, &prog).map_err(|e| e.to_string())?;
+        if let Some((doc, _)) = rewind_assets::glb::parse(&ex.glb) {
+            let env = &doc["scenes"][0]["extras"]["rewind"];
+            eprintln!("  bounds: {}  worldBounds: {}", env["bounds"], env["worldBounds"]);
+            eprintln!("  sun: {}  sky: {}  fog: {}", env["sun"], env["sky"], env["fog"]);
+            eprintln!("  spawns T={} CT={}", env["spawnsT"].as_array().map_or(0, |a| a.len()), env["spawnsCT"].as_array().map_or(0, |a| a.len()));
+        }
+        print_stats(&ex.stats);
+    }
     Ok(())
 }

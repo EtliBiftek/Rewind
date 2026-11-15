@@ -6,4 +6,5 @@ license.workspace = true
 
 [dependencies]
 rewind-core = { path = "../rewind-core" }
+rewind-assets = { path = "../rewind-assets" }
 serde_json.workspace = true

@@ -3,6 +3,8 @@ resolver = "2"
 members = [
   "crates/rewind-core",
   "crates/rewind-cli",
+  "crates/rewind-assets",
+  "crates/vendor/heatel",
   "crates/vendor/cs2-demoparser",
   "crates/vendor/csgoproto",
   "src-tauri",
@@ -25,6 +27,12 @@ opt-level = 3
 [profile.dev.package.csgoproto]
 opt-level = 3
 [profile.dev.package.unsafe-libopus]
+opt-level = 3
+[profile.dev.package.heatel]
+opt-level = 3
+[profile.dev.package.meshoptimizer-rs]
+opt-level = 3
+[profile.dev.package.texture2ddecoder]
 opt-level = 3
 [profile.dev.package.rewind-core]
 opt-level = 2
