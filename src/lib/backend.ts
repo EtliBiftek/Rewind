@@ -63,6 +63,16 @@ export async function libraryStats(): Promise<LibraryStats | null> {
   }
 }
 
+/** Demo passed on the command line (file association), Tauri only. */
+export async function initialDemo(): Promise<string | null> {
+  if (!isTauri()) return null;
+  try {
+    return (await invoke<string | null>("initial_demo")) ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function pickDemoFile(): Promise<string | null> {
   if (!isTauri()) return null;
   const r = await openDialog({ multiple: false, directory: false, filters: [{ name: "CS2 Demo", extensions: ["dem"] }] });

@@ -166,15 +166,15 @@ fn make_suggestion(c: &Candidate, dl: f32, df: f32, why: &str) -> UtilitySuggest
     );
     let move_hint = if df > 120.0 { format!(" Bunun için {:.0} birim uzaktaki atış noktasına geç.", df) } else { " Durduğun yere çok yakın bir noktadan atılıyor.".into() };
     let reason = format!(
-        "{why} {src} başarılı {} örneklerinden {} tanesi bu şekilde atılmış; senin {}in düştüğü yerin {:.0} birim yakınına iniyor.{move_hint} {aim}",
+        "{why} {src} başarılı {} örneklerinden {} tanesi bu şekilde atılmış; senin {} düştüğü yerin {:.0} birim yakınına iniyor.{move_hint} {aim}",
         text::grenade(l.kind),
         l.support,
         match l.kind {
-            GrenadeType::Smoke => "smoke'u",
-            GrenadeType::Flash => "flaşı",
-            GrenadeType::He => "HE bombası",
-            GrenadeType::Molotov => "molotofu",
-            GrenadeType::Decoy => "decoy'u",
+            GrenadeType::Smoke => "smoke'unun",
+            GrenadeType::Flash => "flaşının",
+            GrenadeType::He => "HE bombanın",
+            GrenadeType::Molotov => "molotofunun",
+            GrenadeType::Decoy => "decoy'unun",
         },
         dl
     );

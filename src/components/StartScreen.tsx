@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useStore } from "../lib/store";
-import { isTauri, onFileDrop, pickDemoFile } from "../lib/backend";
+import { initialDemo, isTauri, onFileDrop, pickDemoFile } from "../lib/backend";
 import { Icon } from "./icons";
+
+let initialDemoChecked = false;
 
 export function StartScreen() {
   const phase = useStore((s) => s.phase);
@@ -24,6 +26,15 @@ export function StartScreen() {
       setOver,
     ).then((u) => (un = u));
     return () => un?.();
+  }, [openPath]);
+
+  // opened via file association / command line
+  useEffect(() => {
+    if (initialDemoChecked) return;
+    initialDemoChecked = true;
+    void initialDemo().then((p) => {
+      if (p) void openPath(p);
+    });
   }, [openPath]);
 
   // browser mode: auto-load fixtures

@@ -199,6 +199,16 @@ fn library_stats(app: AppHandle, state: State<'_, AppState>) -> LibraryStats {
     with_library(&app, &state, |lib| lib.stats())
 }
 
+/// A `.dem` path passed on the command line (file association / "open with"), if any.
+#[tauri::command]
+fn initial_demo() -> Option<String> {
+    std::env::args_os()
+        .skip(1)
+        .map(PathBuf::from)
+        .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dem")) && p.is_file())
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 /// End-to-end self test through the real IPC layer (used by CI / developers):
 /// `REWIND_SELFTEST=/path/demo.dem rewind` loads the demo from the webview with the same
 /// `invoke` calls the frontend uses, prints a JSON report to stdout and exits.
@@ -259,7 +269,7 @@ pub fn run() {
             Ok(())
         })
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![load_demo, get_frames, get_voice_pcm, write_file, library_stats])
+        .invoke_handler(tauri::generate_handler![load_demo, get_frames, get_voice_pcm, write_file, library_stats, initial_demo])
         .run(tauri::generate_context!())
         .expect("error while running Rewind");
 }
