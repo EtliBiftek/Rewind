@@ -176,11 +176,11 @@ export class Scene3D {
     sc.add(this.focusMarker);
     // first-person view model
     this.view = new THREE.Group();
-    this.viewGun = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3.4, 17), new THREE.MeshStandardMaterial({ color: 0x20252d, roughness: 0.5, metalness: 0.4 }));
-    this.viewGun.position.set(6.5, -7.5, -16);
+    this.viewGun = new THREE.Mesh(new THREE.BoxGeometry(2.2, 3, 14), new THREE.MeshStandardMaterial({ color: 0x20252d, roughness: 0.5, metalness: 0.4 }));
+    this.viewGun.position.set(8.8, -8.6, -26);
     this.view.add(this.viewGun);
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(3.4, 3.4, 11), new THREE.MeshStandardMaterial({ color: 0xc9a07a, roughness: 0.8 }));
-    arm.position.set(6.8, -9, -7);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 8), new THREE.MeshStandardMaterial({ color: 0xc9a07a, roughness: 0.8 }));
+    arm.position.set(9, -10.6, -17);
     arm.rotation.x = 0.15;
     this.view.add(arm);
     this.view.visible = false;

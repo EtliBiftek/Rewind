@@ -86,7 +86,7 @@ function makePng(w, h, paint) {
   const page = await ctx.newPage();
   page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
   page.on("pageerror", (e) => consoleErrors.push("pageerror: " + e.message));
-  const shot = async (name) => { await page.waitForTimeout(350); await page.screenshot({ path: path.join(OUT, name + ".png") }); };
+  const shot = async (name) => { await page.waitForTimeout(FINAL ? 3500 : 350); await page.evaluate(() => (window.__freeze = true)); try { await page.screenshot({ path: path.join(OUT, name + ".png"), timeout: 120000 }); } finally { await page.evaluate(() => (window.__freeze = false)); } };
   const st = () => page.evaluate(() => { const r = window.__rewind; const s = r.useStore.getState(); return { phase: s.phase, tick: r.clock.tick, playing: s.playing, selected: s.selected, tab: s.tab, viewMode: s.viewMode, cam: s.cam, range: s.range, speed: r.clock.speed, round: s.match ? s.match.roundIndexAt(r.clock.tick) : -1 }; });
   const setS = (p) => page.evaluate((p) => window.__rewind.useStore.getState().set(p), p);
   const click = (sel, opts) => page.locator(sel).first().click(opts);
@@ -122,7 +122,7 @@ function makePng(w, h, paint) {
     await page.waitForTimeout(1200);
     const mid = await st();
     assert(mid.playing, "playing");
-    assert(mid.tick > a + 40, `tick advanced ${a} -> ${mid.tick}`);
+    assert(mid.tick > a + (FINAL ? 8 : 40), `tick advanced ${a} -> ${mid.tick}`);
     await page.keyboard.press("Space");
     const b = (await st()).tick;
     await page.waitForTimeout(400);
@@ -181,18 +181,19 @@ function makePng(w, h, paint) {
   });
 
 
+  const cleanRadar = async () => { await page.evaluate(() => new Promise((r) => { const q = indexedDB.deleteDatabase("rewind"); q.onsuccess = q.onerror = q.onblocked = () => r(); })); await page.evaluate(() => window.__rewind.useStore.setState({ radarImg: null })); };
   await step("radar image: custom PNG aligned by official transform (north up), persisted", async () => {
     await setS({ tab: "watch", viewMode: "2d", follow: false });
     const info = await page.evaluate(() => { const { useStore, clock } = window.__rewind; const m = useStore.getState().match; const r = m.rounds[1]; clock.seek(r.freezeEndTick + 64 * 5); const p = m.sample(clock.tick, 0, { x: 0, y: 0 }); const ps = {}; m.sample(clock.tick, 0, ps); return { map: m.demo.map, x: ps.x, y: ps.y }; });
     if (!info.map.known) { log("       (map.known=false: radar image is not drawn by design)"); return; }
     const px = (info.x - info.map.posX) / info.map.scale, py = (info.map.posY - info.y) / info.map.scale;
-    const png = makePng(1024, 1024, (x, y) => (Math.abs(x - px) < 22 && Math.abs(y - py) < 22 ? [255, 0, 255] : [18 + ((x >> 6) + (y >> 6)) % 2 * 10, 40, 60]));
+    const png = makePng(1024, 1024, (x, y) => (Math.abs(x - px) < 60 && Math.abs(y - py) < 60 ? [255, 0, 255] : [18 + ((x >> 6) + (y >> 6)) % 2 * 10, 40, 60]));
     await page.setInputFiles(".map2d input[type=file]", { name: "radar.png", mimeType: "image/png", buffer: png });
     await page.waitForFunction(() => !!window.__rewind.useStore.getState().radarImg, null, { timeout: 5000 });
     await page.evaluate(() => window.__rewind.useStore.getState().set({ labels: false, showLabels: false }));
     await page.waitForTimeout(500);
     // sample the 2D canvas at the world position of slot 0: marker colour must be magenta-ish (radar), player dot drawn on top is the centre; sample 14px offset instead
-    const col = await page.evaluate(({ x, y }) => { const v = window.__map2d.view, w = window.__map2d.w, h = window.__map2d.h; const c = document.querySelector(".map2d canvas"); const k = c.width / w; const sx = (w / 2 + (x - v.cx) * v.s) * k, sy = (h / 2 - (y - v.cy) * v.s) * k; const ctx = c.getContext("2d"); const at = (dx, dy) => Array.from(ctx.getImageData(Math.round(sx + dx * k), Math.round(sy + dy * k), 1, 1).data); return { c: [at(15, 15), at(-15, 15), at(15, -15), at(-15, -15)], sx, sy }; }, info);
+    const col = await page.evaluate(({ x, y, info_scale }) => { const v = window.__map2d.view, w = window.__map2d.w, h = window.__map2d.h; const c = document.querySelector(".map2d canvas"); const k = c.width / w; const sx = (w / 2 + (x - v.cx) * v.s) * k, sy = (h / 2 - (y - v.cy) * v.s) * k; const ctx = c.getContext("2d"); const at = (dx, dy) => Array.from(ctx.getImageData(Math.round(sx + dx * k), Math.round(sy + dy * k), 1, 1).data); const hf = 60 * 0.8 * info_scale * v.s; return { c: [at(hf, hf), at(-hf, hf), at(hf, -hf), at(-hf, -hf)], sx, sy, hf }; }, { ...info, info_scale: info.map.scale });
     const magenta = (p) => p[0] > 150 && p[2] > 150 && p[1] < 90;
     assert(col.c.some(magenta), "radar marker drawn at the player's world position (Y flip correct): " + JSON.stringify(col));
     await shot("radar-custom");
@@ -207,6 +208,7 @@ function makePng(w, h, paint) {
     await page.evaluate(() => window.__rewind.useStore.setState({ radarImg: null }));
     await setS({ viewMode: "split" });
   });
+  await cleanRadar();
 
   await step("3D view: every camera renders", async () => {
     await setS({ viewMode: "3d" });

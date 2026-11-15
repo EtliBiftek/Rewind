@@ -37,7 +37,7 @@ export function useRaf(cb: (now: number) => void, active = true) {
     if (!active) return;
     let id = 0;
     const loop = (t: number) => {
-      ref.current(t);
+      if (!(window as any).__freeze) ref.current(t);
       id = requestAnimationFrame(loop);
     };
     id = requestAnimationFrame(loop);
