@@ -1,0 +1,20 @@
+[package]
+name = "csgoproto"
+version = "0.1.5"
+authors = ["Laiho"]
+edition = "2021"
+description = "Vendored copy of csgoproto from github.com/LaihoE/demoparser (MIT). protobuf.rs pre-generated from SteamDatabase/GameTracking-CS2 @ 82e2b9d6 with prost-build 0.13."
+license = "MIT"
+publish = false
+
+[lib]
+crate-type = ["lib"]
+doctest = false
+
+[lints.rust]
+warnings = "allow"
+
+[dependencies]
+prost = "0.13.3"
+phf = { version = "0.11", features = ["macros"] }
+strum = { version = "0.26", features = ["derive"] }

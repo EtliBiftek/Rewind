@@ -1,0 +1,9 @@
+[package]
+name = "rewind-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rewind-core = { path = "../rewind-core" }
+serde_json.workspace = true

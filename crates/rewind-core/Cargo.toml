@@ -1,0 +1,19 @@
+[package]
+name = "rewind-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rewind: CS2 demo parsing, voice extraction and heuristic analysis"
+
+[dependencies]
+cs2-demoparser = { path = "../vendor/cs2-demoparser" }
+csgoproto = { path = "../vendor/csgoproto" }
+ahash = "0.8"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+memmap2 = "0.9"
+# libopus transpiled to Rust (c2rust): no C toolchain / system library needed on any platform
+unsafe-libopus = "0.2.0"
+
+[dev-dependencies]
