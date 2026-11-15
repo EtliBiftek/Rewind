@@ -1,3 +1,5 @@
+//! Developer tool: dump game events of a demo.
+//!   cargo run --release -p rewind-core --example probe -- <demo.dem> [event_name ...]
 use ahash::AHashMap;
 use cs2_demoparser::first_pass::parser_settings::{rm_user_friendly_names, ParserInputs};
 use cs2_demoparser::parse_demo::{Parser, ParsingMode};

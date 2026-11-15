@@ -199,10 +199,65 @@ fn library_stats(app: AppHandle, state: State<'_, AppState>) -> LibraryStats {
     with_library(&app, &state, |lib| lib.stats())
 }
 
+/// End-to-end self test through the real IPC layer (used by CI / developers):
+/// `REWIND_SELFTEST=/path/demo.dem rewind` loads the demo from the webview with the same
+/// `invoke` calls the frontend uses, prints a JSON report to stdout and exits.
+fn install_selftest(app: &tauri::App) {
+    use tauri::Listener;
+    let Ok(demo) = std::env::var("REWIND_SELFTEST") else { return };
+    let progress = Arc::new(Mutex::new(0u32));
+    let p2 = progress.clone();
+    app.listen("demo-progress", move |_| *p2.lock().unwrap_or_else(|e| e.into_inner()) += 1);
+    let handle = app.handle().clone();
+    app.listen("rewind-selftest", move |ev| {
+        let n = *progress.lock().unwrap_or_else(|e| e.into_inner());
+        println!("SELFTEST {} progressEvents={n}", ev.payload());
+        handle.exit(0);
+    });
+    let tmp = std::env::temp_dir().join("rewind-selftest.bin");
+    let js = format!(
+        r#"(async () => {{
+  const inv = window.__TAURI_INTERNALS__.invoke;
+  const len = (b) => (b && (b.byteLength ?? b.length)) || 0;
+  const out = {{}};
+  try {{
+    const t0 = performance.now();
+    const d = await inv('load_demo', {{ path: {demo} }});
+    out.loadMs = Math.round(performance.now() - t0);
+    out.rounds = d.rounds.length; out.players = d.players.length; out.insights = d.analysis.insights.length;
+    const fr = await inv('get_frames');
+    out.framesBytes = len(fr); out.expectFrames = d.frames.frameCount * d.frames.playerCount * d.frames.stride * 4;
+    if (d.voice.players.length) {{
+      const vp = d.voice.players[0];
+      const v = await inv('get_voice_pcm', {{ steamId: vp.steamId }});
+      out.voiceBytes = len(v); out.expectVoice = vp.totalSamples * 2;
+    }}
+    await inv('write_file', new Uint8Array([1, 2, 3]), {{ headers: {{ 'x-path': {tmp}, 'x-append': '0' }} }});
+    await inv('write_file', new Uint8Array([4, 5]), {{ headers: {{ 'x-path': {tmp}, 'x-append': '1' }} }});
+    out.lib = await inv('library_stats');
+  }} catch (e) {{ out.error = String(e); }}
+  await inv('plugin:event|emit', {{ event: 'rewind-selftest', payload: out }});
+}})();"#,
+        demo = serde_json::to_string(&demo).unwrap_or_default(),
+        tmp = serde_json::to_string(&tmp.to_string_lossy()).unwrap_or_default()
+    );
+    let handle = app.handle().clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(3));
+        if let Some(w) = handle.get_webview_window("main") {
+            let _ = w.eval(&js);
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            install_selftest(app);
+            Ok(())
+        })
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![load_demo, get_frames, get_voice_pcm, write_file, library_stats])
         .run(tauri::generate_context!())

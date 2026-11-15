@@ -32,6 +32,15 @@ fn downsample_xyz(traj: &[f32], max_pts: usize) -> Vec<f32> {
     out
 }
 
+fn ang_diff(a: f32, b: f32) -> f32 {
+    let d = (a - b).rem_euclid(360.0);
+    if d > 180.0 {
+        360.0 - d
+    } else {
+        d
+    }
+}
+
 fn r1(v: Vec3) -> Vec3 {
     [(v[0] * 10.0).round() / 10.0, (v[1] * 10.0).round() / 10.0, (v[2] * 10.0).round() / 10.0]
 }
@@ -92,7 +101,7 @@ struct Candidate {
 fn land_radius(k: GrenadeType) -> f32 {
     match k {
         GrenadeType::Smoke => 380.0,
-        GrenadeType::Flash => 400.0,
+        GrenadeType::Flash => 320.0,
         GrenadeType::He => 350.0,
         GrenadeType::Molotov => 420.0,
         GrenadeType::Decoy => 0.0,
@@ -135,6 +144,10 @@ fn suggest(g: &Grenade, side: Side, map: &str, cands: &[Candidate], why: &str) -
         }
     }
     let (_, c, dl, df) = best?;
+    Some(make_suggestion(c, dl, df, why))
+}
+
+fn make_suggestion(c: &Candidate, dl: f32, df: f32, why: &str) -> UtilitySuggestion {
     let l = &c.l;
     let land_name = text::place(l.land_place.as_deref()).unwrap_or_else(|| "hedef nokta".into());
     let from_name = text::place(l.from_place.as_deref()).unwrap_or_else(|| "yakın bir nokta".into());
@@ -153,12 +166,19 @@ fn suggest(g: &Grenade, side: Side, map: &str, cands: &[Candidate], why: &str) -
     );
     let move_hint = if df > 120.0 { format!(" Bunun için {:.0} birim uzaktaki atış noktasına geç.", df) } else { " Durduğun yere çok yakın bir noktadan atılıyor.".into() };
     let reason = format!(
-        "{why} {src} başarılı {} örneklerinden {} tanesi bu şekilde atılmış ve senin hedeflediğin bölgeye ({:.0} birim yakınına) düşüyor.{move_hint} {aim}",
+        "{why} {src} başarılı {} örneklerinden {} tanesi bu şekilde atılmış; senin {}in düştüğü yerin {:.0} birim yakınına iniyor.{move_hint} {aim}",
         text::grenade(l.kind),
         l.support,
+        match l.kind {
+            GrenadeType::Smoke => "smoke'u",
+            GrenadeType::Flash => "flaşı",
+            GrenadeType::He => "HE bombası",
+            GrenadeType::Molotov => "molotofu",
+            GrenadeType::Decoy => "decoy'u",
+        },
         dl
     );
-    Some(UtilitySuggestion {
+    UtilitySuggestion {
         kind: l.kind,
         label,
         from: l.from,
@@ -172,7 +192,7 @@ fn suggest(g: &Grenade, side: Side, map: &str, cands: &[Candidate], why: &str) -
         source: c.source.to_string(),
         support: l.support,
         reason,
-    })
+    }
 }
 
 pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> Vec<Lineup> {
@@ -241,8 +261,14 @@ pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> V
         match g.kind {
             GrenadeType::Flash => {
                 let Some(dt) = g.detonate_tick else { continue };
+                // only "real" blinds count (turned-away players get short durations)
+                let mine: Vec<&BlindEvent> = data.blinds.iter().filter(|bl| bl.grenade_id == Some(g.id)).collect();
+                let eff_enemy: Vec<&&BlindEvent> = mine.iter().filter(|bl| !bl.team_flash && bl.duration >= 1.1).collect();
+                let eff_team: Vec<&&BlindEvent> = mine.iter().filter(|bl| bl.team_flash && bl.victim != g.thrower && bl.duration >= 1.1).collect();
+                let enemy_secs: f32 = mine.iter().filter(|bl| !bl.team_flash).map(|bl| bl.duration).sum();
+                let team_secs: f32 = eff_team.iter().map(|bl| bl.duration).sum();
                 let led_to_assist = data.kills.iter().any(|k| k.flash_assist && k.assister == Some(g.thrower) && k.tick >= dt && k.tick - dt < 5 * 64);
-                if g.teammates_flashed >= 1 && g.team_blind_seconds >= 1.5 && g.enemy_blind_seconds < g.team_blind_seconds {
+                if !eff_team.is_empty() && team_secs >= 1.5 && enemy_secs < team_secs {
                     b.push(New {
                         round: g.round,
                         tick: dt,
@@ -254,18 +280,18 @@ pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> V
                         detail: format!(
                             "Attığın flaş{} {} takım arkadaşını toplam {} sn kör etti{}.",
                             at(&land_name),
-                            g.teammates_flashed,
-                            text::secs(g.team_blind_seconds),
-                            if g.enemies_flashed > 0 { format!(", rakiplerden ise yalnızca {} sn", text::secs(g.enemy_blind_seconds)) } else { ", hiçbir rakibi etkilemedi".into() }
+                            eff_team.len(),
+                            text::secs(team_secs),
+                            if enemy_secs > 0.0 { format!(", rakiplerden ise yalnızca {} sn", text::secs(enemy_secs)) } else { ", hiçbir rakibi etkilemedi".into() }
                         ),
                         delta: -3.0,
                         pos,
                         grenade: Some(g.id),
                         suggestion: None,
                     });
-                } else if g.enemies_flashed == 0 && g.teammates_flashed == 0 {
+                } else if enemy_secs < 0.8 && eff_team.is_empty() {
                     let det = g.detonate_pos.unwrap_or(g.throw_pos);
-                    let near = enemies_near(ctx, g.round, side, det, dt, 1200.0);
+                    let near = enemies_near(ctx, g.round, side, det, dt, 800.0);
                     if near > 0 {
                         let sug = suggest(g, side, &map, &pool_get(&mut pool), "Bu flaş kimseyi kör etmedi.");
                         b.push(New {
@@ -277,7 +303,7 @@ pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> V
                             severity: "bad",
                             title: "Flaş kimseyi kör etmedi".into(),
                             detail: format!(
-                                "Attığın flaş{} patladığında {} rakip yakındaydı ama hiçbiri kör olmadı. Flaşı rakibin göremeyeceği şekilde, duvarın arkasından ya da tepeden patlayacak biçimde at.",
+                                "Attığın flaş{} patladığında {} rakip yakındaydı ama hiçbiri (etkili biçimde) kör olmadı. Flaşı rakibin göremeyeceği şekilde, duvarın arkasından ya da tepeden patlayacak biçimde at.",
                                 at(&land_name),
                                 near
                             ),
@@ -287,7 +313,7 @@ pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> V
                             suggestion: sug,
                         });
                     }
-                } else if (g.enemies_flashed >= 2 || g.enemy_blind_seconds >= 3.0) && !led_to_assist && g.teammates_flashed == 0 {
+                } else if (eff_enemy.len() >= 2 || enemy_secs >= 3.0) && !eff_enemy.is_empty() && !led_to_assist && eff_team.is_empty() {
                     b.push(New {
                         round: g.round,
                         tick: dt,
@@ -296,7 +322,7 @@ pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> V
                         category: "utility",
                         severity: "good",
                         title: "Etkili flaş".into(),
-                        detail: format!("Flaşın {} rakibi toplam {} sn kör etti.", g.enemies_flashed, text::secs(g.enemy_blind_seconds)),
+                        detail: format!("Flaşın {} rakibi toplam {} sn kör etti.", eff_enemy.len(), text::secs(enemy_secs)),
                         delta: 3.0,
                         pos,
                         grenade: Some(g.id),
@@ -307,7 +333,7 @@ pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> V
             GrenadeType::He => {
                 let Some(dt) = g.detonate_tick else { continue };
                 let det = g.detonate_pos.unwrap_or(g.throw_pos);
-                let near = enemies_near(ctx, g.round, side, det, dt, 700.0);
+                let near = enemies_near(ctx, g.round, side, det, dt, 500.0);
                 if g.damage == 0 && g.team_damage == 0 && near > 0 {
                     let sug = suggest(g, side, &map, &pool_get(&mut pool), "HE bombası hiç hasar vermedi.");
                     b.push(New {
@@ -321,7 +347,7 @@ pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> V
                         detail: format!(
                             "Attığın HE bombası{} kimseye hasar vermedi{}.",
                             at(&land_name),
-                            format!(" (patladığında {near} rakip 700 birim içindeydi; zamanlama ya da isabet kaçtı)")
+                            format!(" (patladığında {near} rakip 500 birim içindeydi; zamanlama ya da isabet kaçtı)")
                         ),
                         delta: -2.0,
                         pos,
@@ -427,11 +453,20 @@ pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> V
                 let nearest = clusters
                     .iter()
                     .map(|c| (dist2(c.l.land, det), c))
-                    .filter(|(d, c)| *d > 130.0 && *d <= 320.0 && (c.l.land[2] - det[2]).abs() < 150.0 && dist2(c.l.from, g.throw_pos) < 450.0)
+                    .filter(|(d, c)| {
+                        // the player evidently tried this lineup: same spot, (almost) the same aim
+                        *d > 130.0
+                            && *d <= 320.0
+                            && (c.l.land[2] - det[2]).abs() < 150.0
+                            && dist2(c.l.from, g.throw_pos) < 150.0
+                            && ang_diff(c.l.yaw, g.throw_yaw) < 8.0
+                            && (c.l.pitch - g.throw_pitch).abs() < 8.0
+                    })
                     .min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
                 if let Some((d, c)) = nearest {
                     let target = text::place(c.l.land_place.as_deref()).unwrap_or_else(|| "bilinen smoke noktası".into());
-                    let sug = suggest(g, side, &map, &pool_v, "Smoke bilinen noktaya düşmedi.");
+                    let df = dist2(c.l.from, g.throw_pos);
+                    let sug = Some(make_suggestion(c, d, df, "Smoke'un aynı lineup'ın normalde düştüğü yere inmedi (nişan, atış tipi ya da hareket farkı)."));
                     b.push(New {
                         round: g.round,
                         tick: dt,
@@ -441,7 +476,7 @@ pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> V
                         severity: "bad",
                         title: "Smoke hedefe oturmadı".into(),
                         detail: format!(
-                            "Smoke'un {}açıldı; bu bölgede yaygın kullanılan noktanın ({target}) yaklaşık {:.0} birim uzağında. Kenardan açılan smoke görüş hattını tam kapatmayabilir.",
+                            "Smoke'un {}açıldı; aynı yerden aynı nişanla atılan lineup normalde {target} noktasına düşüyor, seninki yaklaşık {:.0} birim saptı. Yanlış yere açılan smoke görüş hattını kapatmayabilir.",
                             land_name.as_deref().map(|p| format!("{p} civarında ")).unwrap_or_default(),
                             d
                         ),
