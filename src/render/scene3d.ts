@@ -93,6 +93,7 @@ interface PlayerVis {
   tagKey: string;
   tagCanvas: HTMLCanvasElement;
   cross: THREE.Group;
+  disc: THREE.Mesh;
 }
 
 interface GrenVis {
@@ -175,11 +176,11 @@ export class Scene3D {
     sc.add(this.focusMarker);
     // first-person view model
     this.view = new THREE.Group();
-    this.viewGun = new THREE.Mesh(new THREE.BoxGeometry(3.4, 4.2, 24), new THREE.MeshStandardMaterial({ color: 0x20252d, roughness: 0.5, metalness: 0.4 }));
-    this.viewGun.position.set(8, -8.5, -20);
+    this.viewGun = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3.4, 17), new THREE.MeshStandardMaterial({ color: 0x20252d, roughness: 0.5, metalness: 0.4 }));
+    this.viewGun.position.set(6.5, -7.5, -16);
     this.view.add(this.viewGun);
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(4.5, 4.5, 16), new THREE.MeshStandardMaterial({ color: 0xc9a07a, roughness: 0.8 }));
-    arm.position.set(8.5, -10.5, -9);
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(3.4, 3.4, 11), new THREE.MeshStandardMaterial({ color: 0xc9a07a, roughness: 0.8 }));
+    arm.position.set(6.8, -9, -7);
     arm.rotation.x = 0.15;
     this.view.add(arm);
     this.view.visible = false;
@@ -367,7 +368,11 @@ export class Scene3D {
     }
     cross.visible = false;
     this.scene.add(cross);
-    return { group, upper, legs, gun, pack, bodyMat, headMat, tag, tagKey: "", tagCanvas, cross };
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(1, 20), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false }));
+    disc.rotation.x = -Math.PI / 2;
+    disc.renderOrder = 5;
+    this.scene.add(disc);
+    return { group, upper, legs, gun, pack, bodyMat, headMat, tag, tagKey: "", tagCanvas, cross, disc };
   }
 
   private drawTag(pv: PlayerVis, name: string, hp: number, side: string, sel: boolean, speaking: boolean) {
@@ -583,7 +588,7 @@ export class Scene3D {
       const alive = isAlive(ps);
       const side = has(ps.flags, FrameFlag.SideCT) ? "CT" : "T";
       const col = new THREE.Color(SIDE_COLOR[side]);
-      const isPovSelf = spec.mode === "pov" && s === spec.selected;
+      const isPovSelf = spec.mode === "pov" && s === spec.selected && alive;
       pv.group.visible = present && !isPovSelf;
       pv.bodyMat.color.copy(col);
       if (!alive) {
@@ -606,6 +611,18 @@ export class Scene3D {
       // tag
       const tp = pv.tag.position;
       Scene3D.v(ps.x, ps.y, ps.z + (duck ? 98 : 112), tp);
+      const camDist = this.camera.position.distanceTo(tp);
+      const tk = Math.min(2.4, Math.max(0.45, camDist / 650));
+      pv.tag.scale.set(70 * tk, 17.5 * tk, 1);
+      // far away (top / free views): flat team-coloured marker so players stay readable
+      const far = camDist > 1100 && alive && present;
+      pv.disc.visible = far;
+      if (far) {
+        pv.disc.position.set(ps.x, ps.z + 6, -ps.y);
+        const r = Math.max(24, camDist * 0.012);
+        pv.disc.scale.set(r, r, 1);
+        (pv.disc.material as THREE.MeshBasicMaterial).color.copy(col);
+      }
       pv.tag.visible = present && alive && !isPovSelf && !(spec.mode === "chase" && s === spec.selected);
       if (pv.tag.visible) this.drawTag(pv, m.players[s].name, ps.health, side, s === spec.selected, opts.speaking.has(s));
       // cross
@@ -774,7 +791,9 @@ export class Scene3D {
     cam.aspect = aspect;
     this.view.visible = false;
     cam.up.set(0, 1, 0);
-    if (spec.mode === "pov") {
+    let mode = spec.mode;
+    if (mode === "pov" && !isAlive(m.sample(tick, spec.selected, this.tmp[13]))) mode = "chase"; // dead: look at the body from behind
+    if (mode === "pov") {
       const ps = m.sample(tick, spec.selected, this.tmp[13]);
       const yaw = ps.yaw * DEG,
         pit = -ps.pitch * DEG;
@@ -785,7 +804,7 @@ export class Scene3D {
       this.view.visible = isAlive(ps) && !scoped;
       const wn = m.weaponName(ps.weapon);
       this.viewGun.scale.set(1, 1, /knife|grenade|flash|smoke|molotov|decoy|c4/.test(wn) ? 0.4 : 1);
-    } else if (spec.mode === "chase") {
+    } else if (mode === "chase") {
       const ps = m.sample(tick, spec.selected, this.tmp[13]);
       const yaw = ps.yaw * DEG;
       const back = new THREE.Vector3(-Math.cos(yaw), 0, Math.sin(yaw));
@@ -793,7 +812,7 @@ export class Scene3D {
       cam.position.copy(head).addScaledVector(back, 170).add(new THREE.Vector3(0, 95, 0));
       cam.fov = vfov(80);
       cam.lookAt(head.x, head.y - 5, head.z);
-    } else if (spec.mode === "free") {
+    } else if (mode === "free") {
       const f = spec.free;
       const yaw = f.yaw * DEG,
         pit = -f.pitch * DEG;

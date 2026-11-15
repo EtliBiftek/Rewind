@@ -1,3 +1,4 @@
+import { fx } from "../lib/model";
 import { useMemo, useState } from "react";
 import { useStore } from "../lib/store";
 import { Map2D } from "./Map2D";
@@ -85,7 +86,7 @@ export function PlayerPage() {
                 <small>/100</small>
               </div>
               <div className="muted">Genel puan</div>
-              <div className="rating">Rating {st.rating.toFixed(2)}</div>
+              <div className="rating">Rating {fx(st.rating, 2)}</div>
             </div>
           )}
         </div>
@@ -133,11 +134,11 @@ export function PlayerPage() {
                     {st.kills} / {st.deaths} / {st.assists}
                   </dd>
                   <dt>ADR</dt>
-                  <dd>{st.adr.toFixed(1)}</dd>
+                  <dd>{fx(st.adr, 1)}</dd>
                   <dt>KAST</dt>
-                  <dd>{st.kast.toFixed(0)}%</dd>
+                  <dd>{fx(st.kast, 0)}%</dd>
                   <dt>Kafa vuruşu</dt>
-                  <dd>{st.hsPercent.toFixed(0)}%</dd>
+                  <dd>{fx(st.hsPercent, 0)}%</dd>
                   <dt>Açılış Ö / L</dt>
                   <dd>
                     {st.openingKills} / {st.openingDeaths}
@@ -147,10 +148,10 @@ export function PlayerPage() {
                     {st.tradeKills} / {st.untradedDeaths}
                   </dd>
                   <dt>İsabet</dt>
-                  <dd>{st.accuracy.toFixed(0)}%</dd>
+                  <dd>{fx(st.accuracy, 0)}%</dd>
                   <dt>Kör edilen rakip</dt>
                   <dd>
-                    {st.enemiesFlashed} ({st.enemyBlindSeconds?.toFixed?.(1)} sn)
+                    {st.enemiesFlashed} ({fx(st.enemyBlindSeconds, 1)} sn)
                   </dd>
                   <dt>Takım arkadaşı flaşı</dt>
                   <dd>{st.teammatesFlashed}</dd>

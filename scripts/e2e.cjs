@@ -40,6 +40,16 @@ function waitHttp(url, ms = 20000) {
   });
 }
 
+
+function makePng(w, h, paint) {
+  const zlib = require("node:zlib");
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  for (let y = 0; y < h; y++) { raw[y * (w * 3 + 1)] = 0; for (let x = 0; x < w; x++) { const [r, g, b] = paint(x, y); const o = y * (w * 3 + 1) + 1 + x * 3; raw[o] = r; raw[o + 1] = g; raw[o + 2] = b; } }
+  const chunk = (t, d) => { const len = Buffer.alloc(4); len.writeUInt32BE(d.length); const td = Buffer.concat([Buffer.from(t), d]); const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(td) >>> 0); return Buffer.concat([len, td, crc]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", ihdr), chunk("IDAT", zlib.deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+}
+
 (async () => {
   if (!flag("no-build")) {
     log("building...");
@@ -168,6 +178,34 @@ function waitHttp(url, ms = 20000) {
     const s = await canvasStats(".map2d canvas");
     assert(s && s.colors > 12, "2D canvas has content " + JSON.stringify(s));
     await shot("2d");
+  });
+
+
+  await step("radar image: custom PNG aligned by official transform (north up), persisted", async () => {
+    await setS({ tab: "watch", viewMode: "2d", follow: false });
+    const info = await page.evaluate(() => { const { useStore, clock } = window.__rewind; const m = useStore.getState().match; const r = m.rounds[1]; clock.seek(r.freezeEndTick + 64 * 5); const p = m.sample(clock.tick, 0, { x: 0, y: 0 }); const ps = {}; m.sample(clock.tick, 0, ps); return { map: m.demo.map, x: ps.x, y: ps.y }; });
+    if (!info.map.known) { log("       (map.known=false: radar image is not drawn by design)"); return; }
+    const px = (info.x - info.map.posX) / info.map.scale, py = (info.map.posY - info.y) / info.map.scale;
+    const png = makePng(1024, 1024, (x, y) => (Math.abs(x - px) < 22 && Math.abs(y - py) < 22 ? [255, 0, 255] : [18 + ((x >> 6) + (y >> 6)) % 2 * 10, 40, 60]));
+    await page.setInputFiles(".map2d input[type=file]", { name: "radar.png", mimeType: "image/png", buffer: png });
+    await page.waitForFunction(() => !!window.__rewind.useStore.getState().radarImg, null, { timeout: 5000 });
+    await page.evaluate(() => window.__rewind.useStore.getState().set({ labels: false, showLabels: false }));
+    await page.waitForTimeout(500);
+    // sample the 2D canvas at the world position of slot 0: marker colour must be magenta-ish (radar), player dot drawn on top is the centre; sample 14px offset instead
+    const col = await page.evaluate(({ x, y }) => { const v = window.__map2d.view, w = window.__map2d.w, h = window.__map2d.h; const c = document.querySelector(".map2d canvas"); const k = c.width / w; const sx = (w / 2 + (x - v.cx) * v.s) * k, sy = (h / 2 - (y - v.cy) * v.s) * k; const ctx = c.getContext("2d"); const at = (dx, dy) => Array.from(ctx.getImageData(Math.round(sx + dx * k), Math.round(sy + dy * k), 1, 1).data); return { c: [at(15, 15), at(-15, 15), at(15, -15), at(-15, -15)], sx, sy }; }, info);
+    const magenta = (p) => p[0] > 150 && p[2] > 150 && p[1] < 90;
+    assert(col.c.some(magenta), "radar marker drawn at the player's world position (Y flip correct): " + JSON.stringify(col));
+    await shot("radar-custom");
+    // persisted across reload
+    await page.reload();
+    await page.waitForSelector(".topbar");
+    await page.waitForFunction(() => !!window.__rewind.useStore.getState().radarImg, null, { timeout: 8000 });
+    await page.evaluate(() => { window.__rewind.useStore.getState().set({ showLabels: true }); });
+    // remove again so later screenshots show the procedural map
+    await page.evaluate(() => window.__rewind.useStore.getState().set({ showRadarImg: false }));
+    await page.evaluate(() => indexedDB.deleteDatabase("rewind"));
+    await page.evaluate(() => window.__rewind.useStore.setState({ radarImg: null }));
+    await setS({ viewMode: "split" });
   });
 
   await step("3D view: every camera renders", async () => {
@@ -363,9 +401,11 @@ function waitHttp(url, ms = 20000) {
     await page.waitForTimeout(400);
   });
 
+  let expectAudio = false;
   if (!QUICK) await step("export: dialog, deterministic render, valid file (ffprobe)", async () => {
     await setS({ tab: "watch", viewMode: "3d", cam: "pov" });
-    const info = await page.evaluate(() => { const { useStore, clock } = window.__rewind; const m = useStore.getState().match; const r = m.rounds[1]; useStore.getState().set({ range: { a: r.freezeEndTick + 64 * 10, b: r.freezeEndTick + 64 * 13 } }); return m.demo.voice.players.length ? m.demo.voice.players[0].segments.find((s) => s.startTick > r.freezeEndTick) : null; });
+    const info = await page.evaluate(() => { const { useStore } = window.__rewind; const m = useStore.getState().match; const v = window.__voice; const p = m.demo.voice.players.find((q) => v.buffers.get(q.slot) && q.segments.length); let a = m.rounds[1].freezeEndTick + 64 * 10; if (p) { const sg = p.segments.find((q) => q.sampleCount > 24000 * 1.5) || p.segments[0]; a = sg.startTick - 32; } useStore.getState().set({ range: { a, b: a + 64 * 2 }, voice: { ...useStore.getState().voice, master: true, mutes: {} } }); return { voice: !!p }; });
+    expectAudio = info.voice;
     await clickText("Video dışa aktar", ".rangectl");
     await page.waitForSelector(".modal.export");
     await shot("export");
@@ -385,10 +425,12 @@ function waitHttp(url, ms = 20000) {
     const v = probe.streams.find((s) => s.codec_type === "video");
     assert(v && v.width === 1280 && v.height === 720, "video stream 1280x720 " + JSON.stringify(v && [v.width, v.height]));
     const frames = parseInt(v.nb_read_frames || v.nb_frames || "0", 10);
-    assert(frames >= 80 && frames <= 95, `~90 frames for 3 s @30fps (${frames})`);
+    assert(frames >= 55 && frames <= 65, `~60 frames for 2 s @30fps (${frames})`);
     const dur = parseFloat(probe.format.duration);
-    assert(dur > 2.5 && dur < 3.6, "duration ~3 s " + dur);
+    assert(dur > 1.7 && dur < 2.6, "duration ~2 s " + dur);
     const a = probe.streams.find((s) => s.codec_type === "audio");
+    if (expectAudio) assert(a, "exported file has an audio track (voice is on)");
+    log(`       stats: ${JSON.stringify(await page.evaluate(() => window.__exportStats))}`);
     log(`       export: ${path.basename(file)} ${size} B, ${v.codec_name}, ${frames} frames, ${dur.toFixed(2)} s, audio=${a ? a.codec_name : "none"}`);
     // decode check
     execFileSync("ffmpeg", ["-v", "error", "-i", file, "-f", "null", "-"]);

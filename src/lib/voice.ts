@@ -12,7 +12,9 @@ interface Active {
 class VoiceEngine {
   ctx: AudioContext | null = null;
   match: Match | null = null;
-  buffers = new Map<number, AudioBuffer | null>(); // slot -> buffer (null = failed)
+  /** slot -> raw 16-bit PCM (null = failed to load). Segments are turned into AudioBuffers lazily. */
+  buffers = new Map<number, Int16Array | null>();
+  segCache = new Map<string, AudioBuffer>();
   loading = false;
   master: GainNode | null = null;
   gains = new Map<number, GainNode>();
@@ -27,22 +29,18 @@ class VoiceEngine {
     this.killActive();
     this.match = m;
     this.buffers.clear();
+    this.segCache.clear();
     this.scheduledCount = 0;
     this.loading = false;
     if (!m.demo.voice?.available) return;
     this.loading = true;
     try {
-      const ctx = this.ensureCtx();
-      const sr = m.demo.voice.sampleRate;
+      this.ensureCtx();
       await Promise.all(
         m.demo.voice.players.map(async (p) => {
           try {
             const raw = await getVoicePcm(p.steamId);
-            const i16 = new Int16Array(raw, 0, raw.byteLength >> 1);
-            const buf = ctx.createBuffer(1, Math.max(1, i16.length), sr);
-            const ch = buf.getChannelData(0);
-            for (let i = 0; i < i16.length; i++) ch[i] = i16[i] / 32768;
-            this.buffers.set(p.slot, buf);
+            this.buffers.set(p.slot, new Int16Array(raw, 0, raw.byteLength >> 1));
           } catch {
             this.buffers.set(p.slot, null);
           }
@@ -52,6 +50,27 @@ class VoiceEngine {
       this.loading = false;
     }
     this.reschedule();
+  }
+
+  /** AudioBuffer for one speech segment (cached). */
+  segBuffer(slot: number, idx: number): AudioBuffer | null {
+    const m = this.match;
+    const pcm = this.buffers.get(slot);
+    const info = m?.demo.voice;
+    if (!pcm || !info) return null;
+    const key = slot + ":" + idx;
+    let b = this.segCache.get(key);
+    if (b) return b;
+    const seg = info.players.find((p) => p.slot === slot)?.segments[idx];
+    if (!seg) return null;
+    const n = Math.max(1, Math.min(seg.sampleCount, pcm.length - seg.sampleOffset));
+    if (n <= 0 || seg.sampleOffset >= pcm.length) return null;
+    b = new AudioBuffer({ length: n, sampleRate: info.sampleRate, numberOfChannels: 1 });
+    const ch = b.getChannelData(0);
+    for (let i = 0; i < n; i++) ch[i] = pcm[seg.sampleOffset + i] / 32768;
+    if (this.segCache.size > 400) this.segCache.delete(this.segCache.keys().next().value as string);
+    this.segCache.set(key, b);
+    return b;
   }
 
   private ensureCtx(): AudioContext {
@@ -135,8 +154,7 @@ class VoiceEngine {
     const horizonTick = nowTick + this.lookahead * speed * tickRate;
     const base = ctx.currentTime;
     for (const p of m.demo.voice.players) {
-      const buf = this.buffers.get(p.slot);
-      if (!buf) continue;
+      if (!this.buffers.get(p.slot)) continue;
       if (this.effectiveGain(p.slot) <= 0) continue;
       for (let i = 0; i < p.segments.length; i++) {
         const s = p.segments[i];
@@ -152,11 +170,13 @@ class VoiceEngine {
         const remainingSamples = s.sampleCount - offsetSamples;
         if (remainingSamples <= 0) continue;
         const when = base + Math.max(0, (s.startTick - nowTick) / (tickRate * speed));
+        const buf = this.segBuffer(p.slot, i);
+        if (!buf) continue;
         const src = ctx.createBufferSource();
         src.buffer = buf;
         src.playbackRate.value = speed;
         src.connect(this.gainFor(p.slot));
-        const off = (s.sampleOffset + offsetSamples) / sr;
+        const off = offsetSamples / sr;
         const dur = remainingSamples / sr;
         src.start(when, off, dur);
         this.scheduledCount++;

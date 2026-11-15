@@ -4,7 +4,9 @@ import type { CoachOverlay } from "../render/draw2d";
 
 export function useCoachOverlay(): CoachOverlay | null {
   const match = useStore((s) => s.match);
-  const id = useStore((s) => s.coachInsight);
+  const rawId = useStore((s) => s.coachInsight);
+  const active = useStore((s) => s.tab === "analysis" && s.analysisTab === "coach");
+  const id = active ? rawId : null;
   return useMemo(() => {
     if (!match || id == null) return null;
     const ins = match.insightById.get(id);

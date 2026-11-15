@@ -53,7 +53,7 @@ function makeRenderer(o: ExportOpts): Renderer {
   const out = document.createElement("canvas");
   out.width = W;
   out.height = H;
-  const ctx = out.getContext("2d")!;
+  const ctx = out.getContext("2d", { willReadFrequently: true })!;
   const st = useStore.getState();
   if (o.view === "2d") {
     const view = fitView(m, W, H);
@@ -140,21 +140,23 @@ async function mixVoice(o: ExportOpts): Promise<AudioBuffer | null> {
   const off = new OfflineAudioContext(1, Math.max(1, Math.ceil(dur * sr)), sr);
   let any = false;
   for (const p of info.players) {
-    const buf = voice.buffers.get(p.slot);
     const gain = voice.effectiveGain(p.slot);
-    if (!buf || gain <= 0) continue;
+    if (!voice.buffers.get(p.slot) || gain <= 0) continue;
     const g = off.createGain();
     g.gain.value = gain;
     g.connect(off.destination);
-    for (const s of p.segments) {
+    for (let i = 0; i < p.segments.length; i++) {
+      const s = p.segments[i];
       const sd = s.sampleCount / info.sampleRate;
       const t0 = (s.startTick - o.a) / m.tickRate;
       if (t0 + sd <= 0 || t0 >= dur) continue;
+      const buf = voice.segBuffer(p.slot, i);
+      if (!buf) continue;
       const src = off.createBufferSource();
       src.buffer = buf;
       src.connect(g);
       const skip = Math.max(0, -t0);
-      src.start(Math.max(0, t0), s.sampleOffset / info.sampleRate + skip, Math.min(sd - skip, dur - Math.max(0, t0)));
+      src.start(Math.max(0, t0), skip, Math.min(sd - skip, dur - Math.max(0, t0)));
       any = true;
     }
   }
@@ -230,17 +232,23 @@ async function runWebCodecs(o: ExportOpts, onProgress: (p: ExportProgress) => vo
   enc.configure({ codec: choice.codec, width: W, height: H, bitrate: Math.round((H >= 1000 ? 9_000_000 : 5_000_000) * (o.fps > 30 ? 1.5 : 1)), framerate: o.fps, ...(choice.kind === "mp4" ? { avc: { format: "avc" } } : {}) });
   const renderer = makeRenderer(o);
   const total = Math.max(1, Math.round(((o.b - o.a) / o.match.tickRate) * o.fps));
+  const stats = { render: 0, wait: 0, frames: total };
+  (window as any).__exportStats = stats;
   try {
     for (let i = 0; i < total; i++) {
       if (signal.aborted) throw new DOMException("İptal edildi", "AbortError");
       if (encErr) throw encErr;
       const tick = o.a + (i * o.match.tickRate) / o.fps;
+      const tr0 = performance.now();
       renderer.draw(tick);
+      stats.render += performance.now() - tr0;
       const VF = (window as any).VideoFrame;
       const frame = new VF(renderer.canvas, { timestamp: Math.round((i * 1e6) / o.fps), duration: Math.round(1e6 / o.fps) });
       enc.encode(frame, { keyFrame: i % (o.fps * 2) === 0 });
       frame.close();
+      const tw0 = performance.now();
       while (enc.encodeQueueSize > 8) await sleep(4);
+      stats.wait += performance.now() - tw0;
       if (i % 2 === 0) {
         onProgress({ stage: "Kareler oluşturuluyor", frac: (i / total) * 0.92, frame: i, total });
         await sleep(0);
@@ -294,21 +302,23 @@ async function runMediaRecorder(o: ExportOpts, onProgress: (p: ExportProgress) =
     const info = o.match.demo.voice;
     const base = actx.currentTime + 0.2;
     for (const p of info.players) {
-      const buf = voice.buffers.get(p.slot);
       const gain = voice.effectiveGain(p.slot);
-      if (!buf || gain <= 0) continue;
+      if (!voice.buffers.get(p.slot) || gain <= 0) continue;
       const g = actx.createGain();
       g.gain.value = gain;
       g.connect(dest);
-      for (const s of p.segments) {
+      for (let i = 0; i < p.segments.length; i++) {
+        const s = p.segments[i];
         const sd = s.sampleCount / info.sampleRate;
         const t0 = (s.startTick - o.a) / o.match.tickRate;
         if (t0 + sd <= 0 || t0 >= (o.b - o.a) / o.match.tickRate) continue;
+        const buf = voice.segBuffer(p.slot, i);
+        if (!buf) continue;
         const src = actx.createBufferSource();
         src.buffer = buf;
         src.connect(g);
         const skip = Math.max(0, -t0);
-        src.start(base + Math.max(0, t0), s.sampleOffset / info.sampleRate + skip, sd - skip);
+        src.start(base + Math.max(0, t0), skip, sd - skip);
         hasAudio = true;
       }
     }

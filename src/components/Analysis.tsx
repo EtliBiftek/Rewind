@@ -1,3 +1,4 @@
+import { fx } from "../lib/model";
 import { useMemo, useState } from "react";
 import { useStore, type AnalysisTab } from "../lib/store";
 import { SIDE_COLOR, catLabel, fmtClock, styleLabel, GRENADE_NAMES, END_REASON, type Match } from "../lib/model";
@@ -35,7 +36,7 @@ export function RadarChart({ values, size = 220 }: { values: Record<string, numb
   };
   const poly = keys.map((k, i) => pt(i, Math.max(2, values[k] ?? 0)).join(",")).join(" ");
   return (
-    <svg width={size} height={size} className="radar">
+    <svg width={size + 120} height={size} viewBox={`-60 0 ${size + 120} ${size}`} className="radar">
       {[25, 50, 75, 100].map((r) => (
         <polygon key={r} points={keys.map((_, i) => pt(i, r).join(",")).join(" ")} fill="none" stroke="#243247" strokeWidth={1} />
       ))}
@@ -76,17 +77,17 @@ const COLS: { k: ColKey; label: string; title?: string; fmt?: (s: PlayerStats) =
   { k: "kills", label: "Ö" },
   { k: "deaths", label: "L", title: "Ölüm" },
   { k: "assists", label: "A", title: "Asist" },
-  { k: "adr", label: "ADR", fmt: (s) => s.adr.toFixed(0) },
-  { k: "kast", label: "KAST", title: "Raunt başına katkı %", fmt: (s) => s.kast.toFixed(0) + "%" },
-  { k: "hsPercent", label: "HS%", title: "Kafa vuruşu yüzdesi", fmt: (s) => s.hsPercent.toFixed(0) + "%" },
-  { k: "kpr", label: "ÖPR", title: "Raunt başına öldürme", fmt: (s) => s.kpr.toFixed(2) },
+  { k: "adr", label: "ADR", fmt: (s) => fx(s.adr, 0) },
+  { k: "kast", label: "KAST", title: "Raunt başına katkı %", fmt: (s) => fx(s.kast, 0) + "%" },
+  { k: "hsPercent", label: "HS%", title: "Kafa vuruşu yüzdesi", fmt: (s) => fx(s.hsPercent, 0) + "%" },
+  { k: "kpr", label: "ÖPR", title: "Raunt başına öldürme", fmt: (s) => fx(s.kpr, 2) },
   { k: "oo", label: "AÖ/AL", title: "Açılış öldürme / açılış ölümü", fmt: (s) => `${s.openingKills}/${s.openingDeaths}`, num: (s) => s.openingKills - s.openingDeaths },
   { k: "tradeKills", label: "Takas", title: "Takas öldürmesi", fmt: (s) => String(s.tradeKills) },
   { k: "clutch", label: "Clutch", title: "Kazanılan / kaybedilen clutch", fmt: (s) => `${Object.values(s.clutchesWon ?? {}).reduce((a, b) => a + b, 0)}/${s.clutchesLost ?? 0}`, num: (s) => Object.values(s.clutchesWon ?? {}).reduce((a, b) => a + b, 0) },
   { k: "multi", label: "2K+", title: "Çoklu öldürme", fmt: (s) => String((s.multiKills?.k2 ?? 0) + (s.multiKills?.k3 ?? 0) + (s.multiKills?.k4 ?? 0) + (s.multiKills?.k5 ?? 0)), num: (s) => (s.multiKills?.k2 ?? 0) + (s.multiKills?.k3 ?? 0) + (s.multiKills?.k4 ?? 0) + (s.multiKills?.k5 ?? 0) },
   { k: "enemiesFlashed", label: "Flaş", title: "Kör edilen rakip", fmt: (s) => String(s.enemiesFlashed) },
   { k: "utilityDamage", label: "YH", title: "Yardımcı hasarı", fmt: (s) => String(Math.round(s.utilityDamage)) },
-  { k: "accuracy", label: "İsabet", fmt: (s) => s.accuracy.toFixed(0) + "%" },
+  { k: "accuracy", label: "İsabet", fmt: (s) => fx(s.accuracy, 0) + "%" },
 ];
 
 export function ScoreboardTab() {
@@ -151,7 +152,7 @@ export function ScoreboardTab() {
                         <b>{Math.round(s.score)}</b>
                       </div>
                     </td>
-                    <td className={s.rating >= 1.05 ? "good" : s.rating < 0.9 ? "bad" : ""}>{s.rating.toFixed(2)}</td>
+                    <td className={s.rating >= 1.05 ? "good" : s.rating < 0.9 ? "bad" : ""}>{fx(s.rating, 2)}</td>
                     {COLS.map((c) => (
                       <td key={c.k}>{c.fmt ? c.fmt(s) : String((s as any)[c.k] ?? "")}</td>
                     ))}
@@ -182,8 +183,8 @@ export function ScoreboardTab() {
               <div className="mini-stats">
                 <span>Çoklu: 2K {selStats.multiKills?.k2 ?? 0} · 3K {selStats.multiKills?.k3 ?? 0} · 4K {selStats.multiKills?.k4 ?? 0} · 5K {selStats.multiKills?.k5 ?? 0}</span>
                 <span>Takassız ölüm: {selStats.untradedDeaths} · Takas edilen ölüm: {selStats.tradedDeaths}</span>
-                <span>Kör ettiği rakip: {selStats.enemiesFlashed} ({selStats.enemyBlindSeconds?.toFixed?.(1)} sn) · takım arkadaşı: {selStats.teammatesFlashed}</span>
-                <span>MVP raunt: {selStats.mvpRounds} · Ort. hayatta kalma: {selStats.avgTimeAlive?.toFixed?.(0)} sn</span>
+                <span>Kör ettiği rakip: {selStats.enemiesFlashed} ({fx(selStats.enemyBlindSeconds, 1)} sn) · takım arkadaşı: {selStats.teammatesFlashed}</span>
+                <span>MVP raunt: {selStats.mvpRounds} · Ort. hayatta kalma: {fx(selStats.avgTimeAlive, 0)} sn</span>
               </div>
             </div>
           </div>
@@ -438,8 +439,8 @@ export function CoachTab() {
                 </tr>
                 <tr>
                   <td>Bakış (yaw / pitch)</td>
-                  <td>{g ? `${g.throwYaw.toFixed(1)}° / ${g.throwPitch.toFixed(1)}°` : "—"}</td>
-                  <td>{`${s.aimYaw.toFixed(1)}° / ${s.aimPitch.toFixed(1)}°`}</td>
+                  <td>{g ? `${fx(g.throwYaw, 1)}° / ${fx(g.throwPitch, 1)}°` : "—"}</td>
+                  <td>{`${fx(s.aimYaw, 1)}° / ${fx(s.aimPitch, 1)}°`}</td>
                 </tr>
                 <tr>
                   <td>Düşüş yeri</td>

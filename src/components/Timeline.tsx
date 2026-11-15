@@ -206,6 +206,7 @@ export function Timeline() {
   };
 
   useRaf(() => {
+    if (useStore.getState().exporting) return;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     const tick = clock.tick;
     const ri = ri0();

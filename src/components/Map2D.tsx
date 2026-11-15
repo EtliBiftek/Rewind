@@ -90,6 +90,7 @@ export function Map2D({ heat, mode = "live", toolbar = true }: Props) {
     const ctx = c.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const s = useStore.getState();
+    if (live) (window as any).__map2d = { view: view.current, w, h };
     const tick = clock.tick;
     if (live && s.follow && !drag.current) {
       const p = match.sample(tick, s.selected, ps.current);

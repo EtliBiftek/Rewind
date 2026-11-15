@@ -396,3 +396,6 @@ export function fmtClock(sec: number): string {
   const s = Math.abs(Math.round(sec));
   return `${neg ? "-" : ""}${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
+
+/** Safe number formatting (null/NaN tolerant). */
+export const fx = (v: number | null | undefined, d = 0): string => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "—");

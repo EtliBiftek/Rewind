@@ -77,7 +77,7 @@ export function LiveScoreboard() {
   const byTeam: Record<Side, { slot: number; ps: ReturnType<typeof newPState> }[]> = { CT: [], T: [] };
   for (let s = 0; s < match.pc; s++) {
     const p = match.sample(tick, s, newPState());
-    const side: Side = has(p.flags, FrameFlag.SideCT) ? "CT" : "T";
+    const side: Side = p.flags & FrameFlag.Connected ? (has(p.flags, FrameFlag.SideCT) ? "CT" : "T") : match.sideInRound(s, Math.max(1, match.roundIndexAt(tick) + 1));
     byTeam[side].push({ slot: s, ps: p });
   }
   void ps;
@@ -188,7 +188,7 @@ export function VoicePanel() {
             <div key={p.slot} className={"vp-p" + (has ? "" : " none")}>
               {sideDot(side)}
               <span className="nm">{p.name}</span>
-              {speaking.has(p.slot) && <span className="speakdot" />}
+              <span className={speaking.has(p.slot) ? "speakdot" : "speakdot ph"} />
               {has ? (
                 <>
                   <button className={"mic" + (v.mutes[p.slot] ? " off" : "")} onClick={() => setVoice({ mutes: { ...v.mutes, [p.slot]: !v.mutes[p.slot] } })} title={v.mutes[p.slot] ? "Sesi aç" : "Sustur"}>

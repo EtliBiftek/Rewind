@@ -84,6 +84,7 @@ const pstates: PState[] = Array.from({ length: 16 }, newPState);
 export function drawScene(ctx: CanvasRenderingContext2D, o: Draw2DOpts) {
   const { match: m, tick, view, w, h } = o;
   const S = view.s;
+  tagBounds = { w, h };
   const X = (wx: number) => w / 2 + (wx - view.cx) * S;
   const Y = (wy: number) => h / 2 - (wy - view.cy) * S;
   ctx.save();
@@ -554,6 +555,7 @@ function arrow(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: number
   ctx.fill();
 }
 
+let tagBounds = { w: 100000, h: 100000 };
 function tag(ctx: CanvasRenderingContext2D, x: number, y: number, lines: string[], color: string, align: CanvasTextAlign = "left") {
   ctx.font = "600 11px system-ui, 'Segoe UI', sans-serif";
   ctx.textBaseline = "top";
@@ -561,7 +563,10 @@ function tag(ctx: CanvasRenderingContext2D, x: number, y: number, lines: string[
   const widths = lines.map((l) => ctx.measureText(l).width);
   const tw = Math.max(...widths) + 12;
   const th = lines.length * 14 + 6;
-  const bx = align === "left" ? x : align === "right" ? x - tw : x - tw / 2;
+  let bx = align === "left" ? x : align === "right" ? x - tw : x - tw / 2;
+  bx = Math.max(4, Math.min(tagBounds.w - tw - 4, bx));
+  y = Math.max(4, Math.min(tagBounds.h - th - 4, y));
+  x = bx + (align === "left" ? 0 : align === "right" ? tw : tw / 2);
   ctx.fillStyle = "rgba(8,12,20,0.88)";
   ctx.strokeStyle = color;
   ctx.lineWidth = 1;
@@ -605,9 +610,9 @@ export function drawCoach2D(ctx: CanvasRenderingContext2D, c: CoachOverlay, X: (
       ctx.moveTo(lx + 7, ly - 7);
       ctx.lineTo(lx - 7, ly + 7);
       ctx.stroke();
-      tag(ctx, lx + 10, ly + 6, ["Gerçek düşüş", g.landPlace ?? "—"], RED);
+      tag(ctx, lx - 12, ly + 8, ["Gerçek düşüş", g.landPlace ?? "—"], RED, "right");
     }
-    tag(ctx, X(g.throwPos[0]) + 10, Y(g.throwPos[1]) - 34, [`Gerçek atış · ${styleLabel(g.throwStyle)}`, `Yaw ${g.throwYaw.toFixed(1)}° Pitch ${g.throwPitch.toFixed(1)}°`], RED);
+    tag(ctx, X(g.throwPos[0]) - 12, Y(g.throwPos[1]) - 20, [`Gerçek atış · ${styleLabel(g.throwStyle)}`, `Yaw ${g.throwYaw.toFixed(1)}° Pitch ${g.throwPitch.toFixed(1)}°`], RED, "right");
   }
   // suggested
   const t = s.trajectory;
@@ -659,7 +664,7 @@ export function drawKillFeed(ctx: CanvasRenderingContext2D, m: Match, kills: Kil
   const recent = kills.filter((k) => k.tick <= tick && tick - k.tick < 7 * tr).slice(-6);
   ctx.font = "600 11.5px system-ui, 'Segoe UI', sans-serif";
   ctx.textBaseline = "middle";
-  let y = 14;
+  let y = 62;
   for (const k of recent) {
     const age = (tick - k.tick) / tr;
     const a = age > 6 ? 1 - (age - 6) : 1;
