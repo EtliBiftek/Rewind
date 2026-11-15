@@ -190,6 +190,27 @@ fn learn(args: &[String]) -> Result<(), String> {
         }
         eprintln!("{demo}: {n} successful throws ({:.1}s), library now {}", t0.elapsed().as_secs_f64(), lib.lineups.len());
     }
+    // keep only lineups several players used (a single throw is not a "lineup")
+    let min_support: u32 = std::env::var("REWIND_MIN_SUPPORT").ok().and_then(|s| s.parse().ok()).unwrap_or(2);
+    lib.lineups.retain(|l| l.support >= min_support);
+    for l in lib.lineups.iter_mut() {
+        // compact: at most 16 trajectory points
+        let pts = l.trajectory.len() / 3;
+        if pts > 16 {
+            let mut t = vec![];
+            for i in 0..16 {
+                let j = (i * (pts - 1)) / 15;
+                t.extend_from_slice(&l.trajectory[j * 3..j * 3 + 3]);
+            }
+            l.trajectory = t;
+        }
+    }
+    lib.lineups.sort_by(|a, b| (a.map.as_str(), a.kind, b.support).cmp(&(b.map.as_str(), b.kind, a.support)));
+    let mut by_map = std::collections::BTreeMap::new();
+    for l in &lib.lineups {
+        *by_map.entry(format!("{} {}", l.map, l.kind.as_str())).or_insert(0) += 1;
+    }
+    eprintln!("seed: {} lineups (support >= {min_support}): {:?}", lib.lineups.len(), by_map);
     let json = serde_json::to_string(&lib).map_err(|e| e.to_string())?;
     std::fs::write(out, json).map_err(|e| e.to_string())?;
     Ok(())

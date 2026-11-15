@@ -487,3 +487,149 @@ pub fn analyze(mut data: DemoData, fs: &FrameStore, extra: &Extra, lib: &LineupL
     data.analysis = Analysis { players: stats, rounds: rounds_an, insights };
     (data, learned)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::demo::Extra;
+    use crate::frames::{FrameStore, Rules, Sample};
+    use crate::model::frame_flag as fl;
+
+    /// 2v2 synthetic round: slots 0,1 = team 0 (CT), slots 2,3 = team 1 (T).
+    fn fixture(kills: Vec<(i32, usize, usize)>, winner: Side) -> (DemoData, FrameStore, Extra) {
+        let players: Vec<PlayerInfo> = (0..4)
+            .map(|i| PlayerInfo { slot: i, steam_id: format!("{}", 100 + i), name: format!("p{i}"), team: (i / 2) as u8, team_name: String::new(), is_bot: false })
+            .collect();
+        let round = RoundInfo {
+            number: 1,
+            start_tick: 0,
+            freeze_end_tick: 64,
+            end_tick: 6400,
+            official_end_tick: 6600,
+            winner: Some(winner),
+            end_reason: "t_eliminated".into(),
+            team_sides: [Side::CT, Side::T],
+            score_before: [0, 0],
+            buy_types: ["full".into(), "full".into()],
+            equip_values: [9000, 9000],
+            bomb_planted_tick: None,
+            bomb_site: None,
+        };
+        let kills: Vec<KillEvent> = kills
+            .into_iter()
+            .map(|(tick, a, v)| KillEvent {
+                tick,
+                round: 1,
+                attacker: Some(a),
+                victim: v,
+                assister: None,
+                flash_assist: false,
+                weapon: "ak47".into(),
+                headshot: false,
+                wallbang: false,
+                through_smoke: false,
+                no_scope: false,
+                attacker_blind: false,
+                attacker_pos: Some([0.0, 0.0, 0.0]),
+                victim_pos: [100.0, 0.0, 0.0],
+                distance: 100.0,
+                is_opening: false,
+                is_trade: false,
+                victim_traded: false,
+            })
+            .collect();
+        let frame_count = 1700;
+        let alive = Sample { present: true, flags: fl::ALIVE | fl::CONNECTED, health: 100, equip: 4500, team: 3, ..Default::default() };
+        let samples: Vec<Vec<Sample>> = (0..4)
+            .map(|p| {
+                (0..frame_count)
+                    .map(|f| {
+                        let tick = f as i32 * 4;
+                        let dead = kills.iter().any(|k| k.victim == p && k.tick <= tick);
+                        let mut s = alive;
+                        s.team = if p < 2 { 3 } else { 2 };
+                        s.pos = [p as f32 * 50.0, 0.0, 0.0];
+                        if dead {
+                            s.flags = fl::CONNECTED;
+                            s.health = 0;
+                        }
+                        s
+                    })
+                    .collect()
+            })
+            .collect();
+        let fs = FrameStore { start_tick: 0, interval: 4, frame_count, samples, rules: vec![Rules::default(); frame_count], places: vec![String::new()], weapons: vec![] };
+        let deaths = kills.iter().map(|_| crate::demo::DeathCtx::default()).collect();
+        let extra = Extra {
+            deaths,
+            reloads: vec![],
+            purchases: vec![],
+            final_score_from_game: None,
+            round_sides: vec![vec![Some(Side::CT), Some(Side::CT), Some(Side::T), Some(Side::T)]],
+        };
+        let data = DemoData {
+            header: DemoHeader { file_name: "t".into(), map_name: "de_mirage".into(), server_name: String::new(), source: "unknown".into(), tick_rate: 64.0, total_ticks: 6600, duration_seconds: 103.0 },
+            map: crate::maps::map_info("de_mirage", [0.0; 3], [1.0; 3]),
+            players,
+            rounds: vec![round],
+            kills,
+            damages: vec![],
+            shots: vec![],
+            blinds: vec![],
+            grenades: vec![],
+            bomb_events: vec![],
+            chat: vec![],
+            frames: FramesMeta { start_tick: 0, sample_interval: 4, frame_count, player_count: 4, stride: 12, weapons: vec![] },
+            voice: VoiceInfo { available: false, sample_rate: 24000, players: vec![] },
+            analysis: Analysis::default(),
+        };
+        (data, fs, extra)
+    }
+
+    #[test]
+    fn opening_trade_and_clutch() {
+        // T p2 kills CT p0 (opening), CT p1 trades p2 within 2 s, then p1 kills p3: CT win.
+        // After p0 dies p1 is last alive CT vs 2 Ts -> 1v2 clutch, won.
+        let (data, fs, extra) = fixture(vec![(1000, 2, 0), (1100, 1, 2), (3000, 1, 3)], Side::CT);
+        let (d, _) = analyze(data, &fs, &extra, &LineupLibrary::default());
+        let k = &d.kills;
+        assert!(k[0].is_opening && !k[1].is_opening);
+        assert!(k[1].is_trade, "p1 avenged p0 within 5 s");
+        assert!(k[0].victim_traded, "p0 was traded");
+        assert!(!k[2].is_trade);
+        let p1 = &d.analysis.players[1];
+        assert_eq!(p1.kills, 2);
+        assert_eq!(p1.trade_kills, 1);
+        assert_eq!(p1.clutches_won.v2, 1, "1v2 clutch won");
+        assert_eq!(p1.multi_kills.k2, 1);
+        let p0 = &d.analysis.players[0];
+        assert_eq!((p0.deaths, p0.opening_deaths, p0.traded_deaths, p0.untraded_deaths), (1, 1, 1, 0));
+        assert_eq!(p0.kast, 100.0, "traded death counts for KAST");
+        assert_eq!(d.analysis.players[2].opening_kills, 1);
+        assert_eq!(d.analysis.rounds[0].mvp, Some(1));
+        assert!(d.analysis.insights.iter().any(|i| i.kind == "clutch_won" && i.player == 1));
+        assert!(d.analysis.insights.iter().any(|i| i.kind == "trade_kill" && i.player == 1));
+        assert!(d.analysis.rounds[0].summary.contains("1v2"));
+    }
+
+    #[test]
+    fn late_revenge_is_not_a_trade() {
+        // p1 kills p2 7 s after p2 killed p0: outside the 5 s window
+        let (data, fs, extra) = fixture(vec![(1000, 2, 0), (1000 + 7 * 64, 1, 2), (3000, 1, 3)], Side::CT);
+        let (d, _) = analyze(data, &fs, &extra, &LineupLibrary::default());
+        assert!(!d.kills[1].is_trade);
+        assert!(!d.kills[0].victim_traded);
+        assert_eq!(d.analysis.players[0].untraded_deaths, 1);
+    }
+
+    #[test]
+    fn rating_is_sane() {
+        let (data, fs, extra) = fixture(vec![(1000, 2, 0), (1100, 1, 2), (3000, 1, 3)], Side::CT);
+        let (d, _) = analyze(data, &fs, &extra, &LineupLibrary::default());
+        let best = &d.analysis.players[1];
+        let worst = &d.analysis.players[3];
+        assert!(best.rating > worst.rating);
+        assert!(best.score > worst.score);
+        assert!(d.analysis.players.iter().all(|p| p.rating >= 0.0));
+    }
+}

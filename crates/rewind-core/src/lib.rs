@@ -1,4 +1,5 @@
 //! Rewind core: CS2 demo parsing, frames, voice and heuristic (offline) analysis.
+#![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 
 pub mod analysis;
 pub mod demo;

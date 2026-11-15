@@ -512,7 +512,7 @@ pub fn round_insights(ctx: &Ctx<'_>, b: &mut Builder) {
         // multi kills (3+)
         for (slot, p) in ctx.rp[ri].iter().enumerate() {
             if p.kills >= 3 {
-                let last = data.kills.iter().filter(|k| k.round == r.number && k.attacker == Some(slot)).last();
+                let last = data.kills.iter().rev().find(|k| k.round == r.number && k.attacker == Some(slot));
                 b.push(New {
                     round: r.number,
                     tick: last.map(|k| k.tick).unwrap_or(r.end_tick),

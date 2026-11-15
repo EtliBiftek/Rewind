@@ -418,7 +418,7 @@ pub fn analyze_utility(ctx: &Ctx<'_>, lib: &LineupLibrary, b: &mut Builder) -> V
                 let pool_v = pool_get(&mut pool);
                 let clusters: Vec<&Candidate> = pool_v
                     .iter()
-                    .filter(|c| c.l.map == map && c.l.kind == GrenadeType::Smoke && c.l.side == side && c.l.support >= if c.source == "this_demo" { 2 } else { 3 })
+                    .filter(|c| c.l.map == map && c.l.kind == GrenadeType::Smoke && c.l.side == side && c.l.support >= 2)
                     .collect();
                 let on_target = clusters.iter().any(|c| dist2(c.l.land, det) <= 110.0 && (c.l.land[2] - det[2]).abs() < 120.0);
                 if on_target {

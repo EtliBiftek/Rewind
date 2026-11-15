@@ -202,6 +202,9 @@ impl<'a> Column<'a> {
     pub fn len(&self) -> usize {
         self.col.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.col.len() == 0
+    }
 }
 
 pub struct Table {

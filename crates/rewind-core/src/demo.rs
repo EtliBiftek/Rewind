@@ -103,7 +103,7 @@ fn first_in<'a>(evs: &'a [&'a Ev], lo: i32, hi: i32) -> Option<&'a Ev> {
     evs.iter().copied().find(|e| e.tick > lo && e.tick <= hi)
 }
 fn last_in<'a>(evs: &'a [&'a Ev], lo: i32, hi: i32) -> Option<&'a Ev> {
-    evs.iter().copied().filter(|e| e.tick > lo && e.tick <= hi).last()
+    evs.iter().rev().copied().find(|e| e.tick > lo && e.tick <= hi)
 }
 
 fn detect_rounds(events: &[Ev], raw: &RawFrames, last_tick: i32) -> Vec<RoundDraft> {
@@ -626,7 +626,7 @@ pub fn build(raw: RawDemo, file_name: &str, progress: &(dyn Fn(&str, f32) + Sync
         if let Some(r) = fs.rules_at(d0.freeze_end + 8) {
             let side0 = team0_side[0];
             let (s0, s1) = if side0 == Side::CT { (r.score_ct, r.score_t) } else { (r.score_t, r.score_ct) };
-            if s0 >= 0 && s1 >= 0 && (s0 + s1) as i32 <= r.rounds_played.max(0) {
+            if s0 >= 0 && s1 >= 0 && s0 + s1 <= r.rounds_played.max(0) {
                 score = [s0 as u32, s1 as u32];
             }
         }
