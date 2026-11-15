@@ -645,7 +645,7 @@ export class Scene3D {
     r.toneMapping = THREE.ACESFilmicToneMapping;
     r.toneMappingExposure = 1.0;
     r.shadowMap.enabled = true;
-    r.shadowMap.type = THREE.PCFSoftShadowMap;
+    r.shadowMap.type = THREE.PCFShadowMap;
     const sun = ex.sun;
     const toSun = new THREE.Vector3(...(sun?.toSun ?? [0.35, 0.82, 0.45])).normalize();
     if (toSun.y < 0.15) toSun.y = 0.15;

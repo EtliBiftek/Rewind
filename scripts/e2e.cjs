@@ -293,6 +293,8 @@ function makePng(w, h, paint) {
       assert(s && s.colors > 8, `real-map ${k} has content ` + JSON.stringify(s));
       await shot(`3d-realmap-${k}`);
     }
+    const perf = await page.evaluate(() => { const s = window.__scene3d; const r = s.renderer; r.render(s.scene, s.camera); const t0 = performance.now(); for (let i = 0; i < 10; i++) r.render(s.scene, s.camera); r.getContext().finish(); const ms = (performance.now() - t0) / 10; return { ms: Math.round(ms * 10) / 10, calls: r.info.render.calls, tris: r.info.render.triangles, gpu: r.getContext().getParameter(r.getContext().RENDERER) }; });
+    log(`       render (top view, this machine's ${perf.gpu}): ${perf.ms} ms/frame, ${perf.calls} draw calls, ${perf.tris} triangles drawn`);
     await page.locator("[data-testid=map-settings-btn]").click();
     await page.waitForSelector("[data-testid=map-settings]");
     const info = await page.locator("[data-testid=map-info]").innerText();

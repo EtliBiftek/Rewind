@@ -384,6 +384,15 @@ fn install_selftest(app: &tauri::App) {
     await inv('write_file', new Uint8Array([1, 2, 3]), {{ headers: {{ 'x-path': {tmp}, 'x-append': '0' }} }});
     await inv('write_file', new Uint8Array([4, 5]), {{ headers: {{ 'x-path': {tmp}, 'x-append': '1' }} }});
     out.lib = await inv('library_stats');
+    out.cs2 = await inv('cs2_status');
+    try {{
+      const t1 = performance.now();
+      const g = await inv('get_map_scene', {{ mapName: d.header.mapName, quality: 'low' }});
+      out.mapBytes = len(g); out.mapMs = Math.round(performance.now() - t1);
+      const t2 = performance.now();
+      const g2 = await inv('get_map_scene', {{ mapName: d.header.mapName, quality: 'low' }});
+      out.mapCachedMs = Math.round(performance.now() - t2); out.mapSame = len(g2) === out.mapBytes;
+    }} catch (e) {{ out.mapError = String(e); }}
   }} catch (e) {{ out.error = String(e); }}
   await inv('plugin:event|emit', {{ event: 'rewind-selftest', payload: out }});
 }})();"#,

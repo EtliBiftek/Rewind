@@ -341,8 +341,8 @@ export function View3D() {
         {cam === "free" && <span className="hint">WASD · Q/E · Shift hızlı · sürükle: bak</span>}
         {cam === "top" && <span className="hint">Sürükle: kaydır · tekerlek: yakınlaş</span>}
         <span className="grow" />
-        <button className={"chip" + (showSettings ? " on" : "")} title="Harita ayarları" data-testid="map-settings-btn" onClick={() => setShowSettings((v) => !v)}>
-          {realMap ? "Gerçek harita" : "Basit görünüm"} ⚙
+        <button className={"chip" + (showSettings ? " on" : "")} title={"Harita ayarları · " + (realMap ? "Gerçek harita" : "Basit görünüm")} data-testid="map-settings-btn" onClick={() => setShowSettings((v) => !v)}>
+          ⚙
         </button>
       </div>
       <MapNotice />
