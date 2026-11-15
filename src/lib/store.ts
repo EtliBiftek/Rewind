@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { DemoData, Vec3 } from "./contract";
+import type { Cs2Status, DemoData, MapQuality, Vec3 } from "./contract";
 import { Match } from "./model";
 import { clock } from "./clock";
 import { getFrames, loadDemoFromPath, loadFixtureDemo, isTauri } from "./backend";
@@ -16,6 +16,32 @@ export interface InsightFilter {
   category: string | "all";
   severity: "all" | "good" | "bad" | "info";
 }
+
+/** State of the real-map (CS2 geometry) layer of the 3D view. */
+export interface MapLoadState {
+  status: "off" | "loading" | "ready" | "fallback";
+  map: string;
+  stage: string;
+  pct: number;
+  /** Turkish reason for the fallback. */
+  message: string | null;
+  info: string | null;
+}
+
+const LS = (k: string, d: string) => {
+  try {
+    return localStorage.getItem("rewind." + k) ?? d;
+  } catch {
+    return d;
+  }
+};
+export const persist = (k: string, v: string) => {
+  try {
+    localStorage.setItem("rewind." + k, v);
+  } catch {
+    /* private mode */
+  }
+};
 
 export interface Store {
   phase: "start" | "loading" | "ready" | "error";
@@ -45,6 +71,14 @@ export interface Store {
   helpOpen: boolean;
   voice: { master: boolean; masterVol: number; onlyTeam: boolean; mutes: Record<number, boolean>; vols: Record<number, number> };
   speakingTick: number;
+  /** "Gerçek harita" (true) or "Basit görünüm" (false). */
+  realMap: boolean;
+  mapQuality: MapQuality;
+  mapState: MapLoadState;
+  cs2: Cs2Status | null;
+  settingsOpen: boolean;
+  /** Bumped to retry loading the real map (e.g. after choosing the CS2 folder). */
+  mapReload: number;
   set: (p: Partial<Store>) => void;
   openPath: (path: string) => Promise<void>;
   openFixtures: () => Promise<void>;
@@ -117,6 +151,12 @@ export const useStore = create<Store>((set, get) => ({
   helpOpen: false,
   voice: { ...defaultVoice },
   speakingTick: 0,
+  realMap: LS("realMap", "1") === "1",
+  mapQuality: (["low", "medium", "high"].includes(LS("mapQuality", "medium")) ? LS("mapQuality", "medium") : "medium") as MapQuality,
+  mapState: { status: "off", map: "", stage: "", pct: 0, message: null, info: null },
+  cs2: null,
+  settingsOpen: false,
+  mapReload: 0,
   set: (p) => set(p),
   openPath: async (path) => {
     set({ phase: "loading", error: null, progress: { stage: "Demo okunuyor", pct: 0 } });

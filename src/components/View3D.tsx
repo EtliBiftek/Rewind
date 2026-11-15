@@ -5,6 +5,106 @@ import { useStore, type CamMode } from "../lib/store";
 import { useCoachOverlay, useRaf, useSize } from "../lib/hooks";
 import { Scene3D, type FreeCam, type TopCam } from "../render/scene3d";
 import { drawOverlay3D } from "../render/hud";
+import { clearCurrentRealMap, loadRealMap, type RealMapAsset } from "../render/realmap";
+import { cs2Status, isTauri, pickCs2Folder, setCs2Path } from "../lib/backend";
+import { persist } from "../lib/store";
+import type { MapQuality } from "../lib/contract";
+
+const QUALITY_LABELS: Record<MapQuality, string> = { low: "Düşük", medium: "Orta", high: "Yüksek" };
+
+/** Picks the CS2 folder (Tauri dialog), stores it and returns a Turkish error or null. */
+export async function chooseCs2Folder(): Promise<string | null> {
+  const p = await pickCs2Folder();
+  if (!p) return null;
+  try {
+    const st = await setCs2Path(p);
+    useStore.setState({ cs2: st });
+    return null;
+  } catch (e) {
+    return String((e as any)?.message ?? e);
+  }
+}
+
+function MapNotice() {
+  const ms = useStore((s) => s.mapState);
+  const real = useStore((s) => s.realMap);
+  const [hidden, setHidden] = useState<string | null>(null);
+  if (!real) return null;
+  if (ms.status === "loading")
+    return (
+      <div className="map-notice loading" data-testid="map-loading">
+        <span className="spin" /> Gerçek harita yükleniyor · {ms.stage} {Math.round(ms.pct * 100)}%
+      </div>
+    );
+  if (ms.status === "fallback" && hidden !== ms.message)
+    return (
+      <div className="map-notice warn" data-testid="map-fallback">
+        <span>Basit görünüm: {ms.message}</span>
+        {isTauri() && (
+          <button className="chip" onClick={async () => {
+            const err = await chooseCs2Folder();
+            if (err) useStore.setState({ mapState: { ...useStore.getState().mapState, message: err } });
+            else useStore.setState({ mapReload: useStore.getState().mapReload + 1 });
+          }}>
+            CS2 klasörünü seç
+          </button>
+        )}
+        <button className="ibtn" title="Kapat" onClick={() => setHidden(ms.message)}>
+          ×
+        </button>
+      </div>
+    );
+  return null;
+}
+
+function MapSettings({ onClose }: { onClose: () => void }) {
+  const real = useStore((s) => s.realMap);
+  const q = useStore((s) => s.mapQuality);
+  const cs2 = useStore((s) => s.cs2);
+  const ms = useStore((s) => s.mapState);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    const m = useStore.getState().match;
+    cs2Status(m?.demo.header.mapName).then((st) => useStore.setState({ cs2: st })).catch(() => {});
+  }, []);
+  return (
+    <div className="map-settings" data-testid="map-settings" onPointerDown={(e) => e.stopPropagation()}>
+      <div className="ms-head">
+        <b>Harita görünümü</b>
+        <button className="ibtn" onClick={onClose}>×</button>
+      </div>
+      <div className="seg">
+        <button className={real ? "on" : ""} onClick={() => (persist("realMap", "1"), useStore.setState({ realMap: true }))}>Gerçek harita</button>
+        <button className={!real ? "on" : ""} onClick={() => (persist("realMap", "0"), useStore.setState({ realMap: false }))}>Basit görünüm</button>
+      </div>
+      <label className="ms-row">
+        Kalite
+        <select value={q} onChange={(e) => (persist("mapQuality", e.target.value), useStore.setState({ mapQuality: e.target.value as MapQuality }))}>
+          {(Object.keys(QUALITY_LABELS) as MapQuality[]).map((k) => (
+            <option key={k} value={k}>{QUALITY_LABELS[k]}</option>
+          ))}
+        </select>
+      </label>
+      <div className="ms-row col">
+        <span className="muted">CS2 klasörü {cs2?.source === "manual" ? "(elle seçildi)" : cs2?.source === "auto" ? "(otomatik bulundu)" : ""}</span>
+        <code data-testid="cs2-path">{cs2 ? (cs2.found ? cs2.path : cs2.error ?? "bulunamadı") : "…"}</code>
+        {cs2?.found && <span className="muted">{cs2.maps.length} harita</span>}
+      </div>
+      {isTauri() && (
+        <div className="ms-row">
+          <button className="chip" onClick={async () => setErr(await chooseCs2Folder())}>CS2 klasörünü seç</button>
+          {cs2?.source === "manual" && (
+            <button className="chip" onClick={async () => { try { useStore.setState({ cs2: await setCs2Path(null) }); setErr(null); } catch (e) { setErr(String(e)); } }}>
+              Otomatik bul
+            </button>
+          )}
+        </div>
+      )}
+      {err && <div className="ms-err">{err}</div>}
+      {ms.info && <div className="muted small" data-testid="map-info">{ms.info}</div>}
+    </div>
+  );
+}
 
 export const CAM_LABELS: Record<CamMode, string> = { pov: "Birinci şahıs", chase: "Takip", free: "Serbest", top: "Üstten" };
 
@@ -25,6 +125,10 @@ export function View3D() {
   const drag = useRef<{ x: number; y: number } | null>(null);
   const lastT = useRef(performance.now());
   const [err, setErr] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const realMap = useStore((s) => s.realMap);
+  const mapQuality = useStore((s) => s.mapQuality);
+  const mapReload = useStore((s) => s.mapReload);
 
   useEffect(() => {
     const c = cv.current;
@@ -49,6 +153,42 @@ export function View3D() {
       rend.current = null;
     };
   }, [match]);
+
+  // real map: load (backend export / cache / fixture) and swap it in; fall back to the reconstructed floor
+  useEffect(() => {
+    const sc = scene.current;
+    const r = rend.current;
+    if (!sc || !r) return;
+    const map = (match.demo.header.mapName || match.demo.map.name || "").split(/[\\/]/).pop()!.toLowerCase();
+    if (!realMap) {
+      sc.setRealMap(null);
+      clearCurrentRealMap();
+      useStore.setState({ mapState: { status: "off", map, stage: "", pct: 0, message: null, info: null } });
+      return;
+    }
+    let alive = true;
+    useStore.setState({ mapState: { status: "loading", map, stage: "Başlatılıyor", pct: 0, message: null, info: null } });
+    loadRealMap(r, map, mapQuality, (p) => {
+      if (alive) useStore.setState({ mapState: { ...useStore.getState().mapState, stage: p.stage, pct: p.pct } });
+    })
+      .then((asset: RealMapAsset) => {
+        if (!alive || scene.current !== sc) return;
+        sc.setRealMap(asset);
+        const st = asset.stats;
+        const info = `${(st.triangles / 1e6).toFixed(2)} M üçgen · ${st.drawCalls} çizim · ${st.materials} malzeme · ${st.textures} doku (${st.textureMB} MB) · ${st.glbMB} MB · ${st.fetchMs + st.parseMs} ms`;
+        useStore.setState({ mapState: { status: "ready", map, stage: "Hazır", pct: 1, message: null, info } });
+        (window as any).__realmap = asset;
+      })
+      .catch((e) => {
+        if (!alive) return;
+        sc.setRealMap(null);
+        clearCurrentRealMap();
+        useStore.setState({ mapState: { status: "fallback", map, stage: "", pct: 0, message: String((e as any)?.message ?? e), info: null } });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [match, realMap, mapQuality, mapReload]);
 
   // frame the coach throw: free camera behind the suggested stand position
   const coachId = coach?.insight.id;
@@ -200,7 +340,13 @@ export function View3D() {
         ))}
         {cam === "free" && <span className="hint">WASD · Q/E · Shift hızlı · sürükle: bak</span>}
         {cam === "top" && <span className="hint">Sürükle: kaydır · tekerlek: yakınlaş</span>}
+        <span className="grow" />
+        <button className={"chip" + (showSettings ? " on" : "")} title="Harita ayarları" data-testid="map-settings-btn" onClick={() => setShowSettings((v) => !v)}>
+          {realMap ? "Gerçek harita" : "Basit görünüm"} ⚙
+        </button>
       </div>
+      <MapNotice />
+      {showSettings && <MapSettings onClose={() => setShowSettings(false)} />}
       {err && <div className="center-msg">{err}</div>}
     </div>
   );

@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { FrameFlag, type Grenade, type UtilitySuggestion } from "../lib/contract";
 import { GRENADE_COLORS, Match, SIDE_COLOR, grenadeEnd, has, isAlive, newPState, styleLabel, weaponLabel, type PState } from "../lib/model";
 import type { CoachOverlay } from "./draw2d";
+import type { RealMapAsset } from "./realmap";
 
 export type CamMode = "pov" | "chase" | "free" | "top";
 export interface FreeCam {
@@ -74,7 +75,7 @@ function labelSprite(lines: string[], color: string, scale = 1): THREE.Sprite {
   lines.forEach((l, i) => g2.fillText(l, 14, 10 + i * 34));
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, toneMapped: false }));
   const k = 0.42 * scale;
   sp.scale.set(c.width * k, c.height * k, 1);
   sp.renderOrder = 20;
@@ -104,9 +105,18 @@ interface GrenVis {
   sprites: THREE.Sprite[];
 }
 
+/** Standing / crouched player height in Source units (CS2 hull: 72 / 54). */
+export const PLAYER_H = 72;
+export const PLAYER_H_DUCK = 54;
+/** CS2 view offsets (eye height above the feet). */
+export const EYE_H = 64;
+export const EYE_H_DUCK = 46;
+/** The stylised player model is authored ~78 units tall; scaled to the real hull height. */
+const MODEL_TOP = 78;
+
 export class Scene3D {
   scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(75, 16 / 9, 3, 30000);
+  camera = new THREE.PerspectiveCamera(75, 16 / 9, 2, 40000);
   match: Match;
   renderer: THREE.WebGLRenderer;
   players: PlayerVis[] = [];
@@ -129,6 +139,15 @@ export class Scene3D {
   boundsCenter = new THREE.Vector3();
   boundsSize = 4000;
   time = 0;
+  hemi: THREE.HemisphereLight;
+  sun: THREE.DirectionalLight;
+  ambient: THREE.AmbientLight;
+  /** The real map currently shown (null = reconstructed floor). */
+  realMap: RealMapAsset | null = null;
+  private realRoot: THREE.Object3D | null = null;
+  private sky: THREE.Mesh | null = null;
+  private shadowHalf = 0;
+  private clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
 
   constructor(match: Match, renderer: THREE.WebGLRenderer) {
     this.match = match;
@@ -136,11 +155,14 @@ export class Scene3D {
     const sc = this.scene;
     sc.background = new THREE.Color(0x0a1019);
     sc.fog = new THREE.FogExp2(0x0a1019, 0.00011);
-    sc.add(new THREE.HemisphereLight(0xb6ccff, 0x1b2433, 1.15));
+    this.hemi = new THREE.HemisphereLight(0xb6ccff, 0x1b2433, 1.15);
+    sc.add(this.hemi);
     const sun = new THREE.DirectionalLight(0xfff0dc, 1.5);
     sun.position.set(-1200, 2400, 900);
-    sc.add(sun);
-    sc.add(new THREE.AmbientLight(0x405070, 0.5));
+    this.sun = sun;
+    sc.add(sun, sun.target);
+    this.ambient = new THREE.AmbientLight(0x405070, 0.5);
+    sc.add(this.ambient);
     sc.add(this.camera);
     sc.add(this.floorGroup);
     this.buildWorld();
@@ -348,6 +370,7 @@ export class Scene3D {
     pack.position.set(-11, 48, 0);
     upper.add(pack);
     group.add(upper);
+    group.traverse((o) => ((o as THREE.Mesh).isMesh ? (((o as THREE.Mesh).castShadow = true), ((o as THREE.Mesh).receiveShadow = true)) : null));
     this.scene.add(group);
     // name tag
     const tagCanvas = document.createElement("canvas");
@@ -355,7 +378,7 @@ export class Scene3D {
     tagCanvas.height = 64;
     const tex = new THREE.CanvasTexture(tagCanvas);
     tex.colorSpace = THREE.SRGBColorSpace;
-    const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+    const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, toneMapped: false }));
     tag.scale.set(70, 17.5, 1);
     tag.renderOrder = 10;
     this.scene.add(tag);
@@ -568,7 +591,142 @@ export class Scene3D {
   }
 
   eyeOf(ps: PState): number {
-    return ps.z + (has(ps.flags, FrameFlag.Ducking) ? 46 : 64);
+    return ps.z + (has(ps.flags, FrameFlag.Ducking) ? EYE_H_DUCK : EYE_H);
+  }
+
+  /**
+   * Shows the real map geometry instead of the reconstructed floor (null = back to the stylised blockout).
+   * The asset's meshes are shared between Scene3D instances (3D view + video export), so a second user gets a
+   * shallow clone (same geometry/materials) and dispose() never frees them.
+   */
+  setRealMap(asset: RealMapAsset | null) {
+    if (this.realRoot) {
+      this.scene.remove(this.realRoot);
+      this.realRoot = null;
+    }
+    if (this.sky) {
+      this.scene.remove(this.sky);
+      this.sky.geometry.dispose();
+      (this.sky.material as THREE.Material).dispose();
+      this.sky = null;
+    }
+    this.realMap = asset;
+    const r = this.renderer;
+    const sc = this.scene;
+    if (!asset) {
+      this.floorGroup.visible = true;
+      r.toneMapping = THREE.NoToneMapping;
+      r.toneMappingExposure = 1;
+      r.shadowMap.enabled = false;
+      r.clippingPlanes = [];
+      sc.background = new THREE.Color(0x0a1019);
+      sc.fog = new THREE.FogExp2(0x0a1019, 0.00011);
+      this.hemi.color.set(0xb6ccff);
+      this.hemi.groundColor.set(0x1b2433);
+      this.hemi.intensity = 1.15;
+      this.sun.color.set(0xfff0dc);
+      this.sun.intensity = 1.5;
+      this.sun.castShadow = false;
+      this.sun.position.set(-1200, 2400, 900);
+      this.sun.target.position.set(0, 0, 0);
+      this.ambient.intensity = 0.5;
+      this.camera.near = 2;
+      return;
+    }
+    this.floorGroup.visible = false;
+    const root = asset.root.parent ? asset.root.clone() : asset.root;
+    this.realRoot = root;
+    sc.add(root);
+    const ex = asset.extras;
+    const b = ex.bounds;
+    this.boundsCenter.set((b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2);
+    this.boundsSize = Math.max(1000, Math.min(16000, Math.max(b.max[0] - b.min[0], b.max[2] - b.min[2])));
+    // ---- light: sun from light_environment, sky/ground fill, filmic tone mapping
+    r.toneMapping = THREE.ACESFilmicToneMapping;
+    r.toneMappingExposure = 1.0;
+    r.shadowMap.enabled = true;
+    r.shadowMap.type = THREE.PCFSoftShadowMap;
+    const sun = ex.sun;
+    const toSun = new THREE.Vector3(...(sun?.toSun ?? [0.35, 0.82, 0.45])).normalize();
+    if (toSun.y < 0.15) toSun.y = 0.15;
+    toSun.normalize();
+    (this.sun.userData as any).toSun = toSun;
+    const sunCol = new THREE.Color().setRGB(...((sun?.color ?? [1, 0.95, 0.86]) as [number, number, number]), THREE.SRGBColorSpace);
+    this.sun.color.copy(sunCol);
+    this.sun.intensity = 2.6 * Math.max(0.5, Math.min(2.2, sun?.brightness ?? 1.2));
+    this.sun.castShadow = true;
+    const hi = asset.stats.triangles > 1.5e6 ? 4096 : 2048;
+    this.sun.shadow.mapSize.set(hi, hi);
+    this.sun.shadow.bias = -0.0004;
+    this.sun.shadow.normalBias = 1.2;
+    this.shadowHalf = 0;
+    const skyTint = new THREE.Color().setRGB(...((ex.sky?.tint ?? [1, 1, 1]) as [number, number, number]), THREE.SRGBColorSpace);
+    const zenith = new THREE.Color(0x5d8fd6).multiply(skyTint);
+    const horizon = ex.fog?.color ? new THREE.Color().setRGB(...(ex.fog.color as [number, number, number]), THREE.SRGBColorSpace) : new THREE.Color(0xc9d6e3).multiply(skyTint);
+    this.hemi.color.copy(zenith).lerp(new THREE.Color(0xffffff), 0.45);
+    this.hemi.groundColor.set(0x6e6152);
+    this.hemi.intensity = 1.25;
+    this.ambient.color.set(0xffffff);
+    this.ambient.intensity = sun?.ambient ? 0.35 : 0.22;
+    if (sun?.ambient) this.ambient.color.setRGB(...(sun.ambient as [number, number, number]), THREE.SRGBColorSpace);
+    sc.background = horizon.clone();
+    // fog: from env_cubemap_fog / env_gradient_fog when present, otherwise a light aerial haze
+    const fs = ex.fog?.start ?? null;
+    const fe = ex.fog?.end ?? null;
+    sc.fog = fs != null && fe != null && fe > fs && fe > 500 ? new THREE.Fog(horizon, fs, fe / Math.max(0.2, Math.min(1, ex.fog?.maxOpacity ?? 1))) : new THREE.Fog(horizon, 4000, 26000);
+    // sky dome (vertical gradient, follows the camera)
+    const skyMat = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      fog: false,
+      uniforms: { top: { value: zenith }, bottom: { value: horizon }, sunDir: { value: toSun }, sunCol: { value: sunCol } },
+      vertexShader: "varying vec3 vDir; void main(){ vDir = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }",
+      fragmentShader:
+        "uniform vec3 top; uniform vec3 bottom; uniform vec3 sunDir; uniform vec3 sunCol; varying vec3 vDir; void main(){ float h = clamp(vDir.y * 1.6 + 0.05, 0.0, 1.0); vec3 c = mix(bottom, top, pow(h, 0.7)); float s = max(dot(normalize(vDir), sunDir), 0.0); c += sunCol * (pow(s, 600.0) * 3.0 + pow(s, 12.0) * 0.18); gl_FragColor = vec4(c, 1.0); \n#include <tonemapping_fragment>\n#include <colorspace_fragment>\n}",
+    });
+    this.sky = new THREE.Mesh(new THREE.SphereGeometry(30000, 32, 16), skyMat);
+    this.sky.renderOrder = -10;
+    this.sky.frustumCulled = false;
+    sc.add(this.sky);
+    this.camera.near = 2;
+  }
+
+  /** Keeps the shadow frustum around what the camera looks at (texel-snapped to avoid shimmering). */
+  private updateSun(mode: CamMode) {
+    if (!this.realMap || !this.sun.castShadow) return;
+    const toSun = (this.sun.userData as any).toSun as THREE.Vector3;
+    const cam = this.camera;
+    const dir = new THREE.Vector3();
+    cam.getWorldDirection(dir);
+    let half: number;
+    const focus = new THREE.Vector3();
+    if (mode === "top") {
+      half = Math.min(9000, this.boundsSize * 0.62);
+      focus.copy(this.boundsCenter);
+    } else {
+      half = mode === "free" ? 2600 : 1700;
+      focus.copy(cam.position).addScaledVector(dir.setY(0).normalize(), half * 0.55);
+      focus.y = cam.position.y - 80;
+    }
+    const texel = (2 * half) / this.sun.shadow.mapSize.x;
+    focus.x = Math.round(focus.x / texel) * texel;
+    focus.z = Math.round(focus.z / texel) * texel;
+    focus.y = Math.round(focus.y / texel) * texel;
+    const sc = this.sun.shadow.camera as THREE.OrthographicCamera;
+    if (half !== this.shadowHalf) {
+      this.shadowHalf = half;
+      sc.left = -half;
+      sc.right = half;
+      sc.top = half;
+      sc.bottom = -half;
+      sc.near = 10;
+      sc.far = 12000;
+      sc.updateProjectionMatrix();
+    }
+    this.sun.target.position.copy(focus);
+    this.sun.position.copy(focus).addScaledVector(toSun, 6000);
+    this.sun.target.updateMatrixWorld();
+    if (this.sky) this.sky.position.copy(cam.position);
   }
 
   update(tick: number, spec: CamSpec, opts: { speaking: Set<number>; focus: { pos: [number, number, number]; ts: number } | null; now: number }) {
@@ -603,14 +761,17 @@ export class Scene3D {
         pv.group.position.set(ps.x, ps.z, -ps.y);
       }
       const duck = has(ps.flags, FrameFlag.Ducking);
-      pv.legs.scale.y = duck ? 0.6 : 1;
-      pv.upper.position.y = duck ? -17 : 0;
+      // model top: 78 standing -> 72 units after scaling; crouched 54 units
+      pv.group.scale.setScalar(PLAYER_H / MODEL_TOP);
+      const drop = duck ? MODEL_TOP - (PLAYER_H_DUCK * MODEL_TOP) / PLAYER_H : 0;
+      pv.legs.scale.y = duck ? (32 - drop) / 32 : 1;
+      pv.upper.position.y = -drop;
       pv.gun.rotation.z = -(ps.pitch * DEG) * 0.9;
       pv.pack.visible = has(ps.flags, FrameFlag.HasBomb) && alive;
       pv.gun.visible = alive;
       // tag
       const tp = pv.tag.position;
-      Scene3D.v(ps.x, ps.y, ps.z + (duck ? 98 : 112), tp);
+      Scene3D.v(ps.x, ps.y, ps.z + (duck ? PLAYER_H_DUCK : PLAYER_H) + 30, tp);
       const camDist = this.camera.position.distanceTo(tp);
       const tk = Math.min(2.4, Math.max(0.45, camDist / 650));
       pv.tag.scale.set(70 * tk, 17.5 * tk, 1);
@@ -769,6 +930,14 @@ export class Scene3D {
 
     // ---- camera
     this.placeCamera(tick, spec);
+    this.updateSun(spec.mode);
+    // top view of the real map: cut away roofs above the watched player so the playable floor is visible
+    if (this.realMap && spec.mode === "top") {
+      const ps = m.sample(tick, spec.selected, this.tmp[14]);
+      const cut = (isAlive(ps) ? ps.z : this.boundsCenter.y) + 190;
+      this.clipPlane.constant = cut;
+      this.renderer.clippingPlanes = [this.clipPlane];
+    } else if (this.renderer.clippingPlanes.length) this.renderer.clippingPlanes = [];
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -830,6 +999,8 @@ export class Scene3D {
   }
 
   dispose() {
+    // the real map's meshes are shared and cached: never free them here
+    this.setRealMap(null);
     this.clearRoundObjects();
     this.scene.traverse((o) => {
       const mesh = o as THREE.Mesh;

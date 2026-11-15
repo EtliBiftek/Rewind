@@ -3,6 +3,7 @@ import { Muxer as Mp4Muxer, ArrayBufferTarget as Mp4Target } from "mp4-muxer";
 import { Muxer as WebmMuxer, ArrayBufferTarget as WebmTarget } from "webm-muxer";
 import { drawScene, fitView } from "../render/draw2d";
 import { Scene3D, type CamMode } from "../render/scene3d";
+import { currentRealMap } from "../render/realmap";
 import { drawOverlay3D } from "../render/hud";
 import type { Match } from "./model";
 import { voice } from "./voice";
@@ -92,6 +93,9 @@ function makeRenderer(o: ExportOpts): Renderer {
   r.setSize(W, H, false);
   r.outputColorSpace = THREE.SRGBColorSpace;
   const sc = new Scene3D(m, r);
+  // the real CS2 map, when the 3D view shows it (shared geometry; uploaded again to this context)
+  const rm = currentRealMap();
+  if (rm && useStore.getState().realMap && useStore.getState().mapState.status === "ready") sc.setRealMap(rm);
   const free = sc.defaultFree();
   const top = sc.defaultTop();
   return {

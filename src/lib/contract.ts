@@ -12,9 +12,20 @@
  *   write_file(path: string, append: boolean) + raw body    -> void   (body = bytes; path sent in the `x-path` header, append in `x-append`: "1"/"0")
  *   library_stats()                    -> LibraryStats      (persistent lineup library learned from every demo ever loaded + bundled seed)
  *
+ * Real map geometry (read at runtime from the user's own CS2 install; nothing of Valve's is bundled):
+ *   cs2_status()                       -> Cs2Status         (install found?, game/csgo path, maps available)
+ *   set_cs2_path(path: string | null)  -> Cs2Status         (manual CS2 folder, persisted in the app config dir; null = automatic
+ *                                                            discovery; rejects folders that are not an install with a Turkish error)
+ *   get_map_scene(mapName: string, quality: MapQuality, textures?: "ktx2" | "image")
+ *                                      -> ArrayBuffer       (binary glTF of the map, see MapSceneExtras; exported on first use and
+ *                                                            cached in the app cache dir; emits `map-progress` events: MapProgress;
+ *                                                            errors are Turkish strings)
+ *
  * Browser/dev mode (no Tauri): the frontend fetches the same payloads from
  *   /fixtures/demo.json, /fixtures/frames.bin, /fixtures/voice_<steamId>.bin
- * which `cargo run -p rewind-cli -- export <demo.dem> --out public/fixtures` produces.
+ * which `cargo run -p rewind-cli -- export <demo.dem> --out public/fixtures` produces, and the real map from
+ *   /fixtures/map_<mapName>.glb   (`rewind-cli map-export <map> --cs2 <CS2 folder> --out public/fixtures/map_<map>.glb`;
+ *                                  gitignored and never shipped: Valve content stays on the user's machine)
  */
 
 export type Vec3 = [number, number, number];
@@ -377,4 +388,53 @@ export interface UtilitySuggestion {
 export interface LibraryStats {
   demos: number;
   lineupsByMap: Record<string, number>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Real map (CS2 install)                                              */
+/* ------------------------------------------------------------------ */
+
+export type MapQuality = "low" | "medium" | "high";
+
+export interface Cs2Status {
+  found: boolean;
+  /** `.../game/csgo` when found; otherwise the (invalid) manual path if one is set. */
+  path: string | null;
+  /** "manual" = chosen by the user, "auto" = found through Steam's library folders. */
+  source: "manual" | "auto" | null;
+  /** Map names with a package in game/csgo/maps (e.g. "de_mirage"). */
+  maps: string[];
+  /** Turkish reason when not found. */
+  error: string | null;
+}
+
+export interface MapProgress {
+  map: string;
+  stage: string; // Turkish
+  pct: number; // 0..1
+}
+
+/**
+ * The GLB's `scenes[0].extras.rewind`. Geometry is already in three.js world space: (x, z, -y) of Source units,
+ * the same mapping `Scene3D.v` uses, so no node transforms are needed. One node/mesh/primitive per batch
+ * (material x spatial cell). Vertex attributes: POSITION f32, NORMAL i8 normalized (KHR_mesh_quantization),
+ * TEXCOORD_0 f32, COLOR_0 u8 normalized (linear tint incl. per-object tint; alpha = opacity). Material extras:
+ * { path, shader, overlay, additive, kind: "default" | "water" | "glass" | "missing" }.
+ */
+export interface MapSceneExtras {
+  map: string;
+  rev: number;
+  quality: MapQuality;
+  units: "source";
+  /** Bounds of the exported geometry in three.js space. */
+  bounds: { min: Vec3; max: Vec3 };
+  /** Bounds of the world nodes in Source space. */
+  worldBounds: { min: Vec3; max: Vec3 } | null;
+  /** From light_environment: direction towards the sun (three.js space, unit), colour 0..1, brightness. */
+  sun: { toSun: Vec3; color: Vec3; brightness: number; ambient: Vec3 | null } | null;
+  sky: { material: string | null; tint: Vec3; brightness: number } | null;
+  fog: { class: string; start: number | null; end: number | null; maxOpacity: number | null; color: Vec3 | null } | null;
+  spawnsT: Vec3[];
+  spawnsCT: Vec3[];
+  stats: Record<string, unknown>;
 }

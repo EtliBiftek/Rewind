@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
-import type { DemoData, LibraryStats } from "./contract";
+import type { Cs2Status, DemoData, LibraryStats, MapProgress, MapQuality } from "./contract";
 
 export interface Progress {
   stage: string;
@@ -153,4 +153,50 @@ export async function onFileDrop(cb: (paths: string[]) => void, onHover?: (over:
     }
   });
   return un;
+}
+
+/* ------------------------------------------------------------------ real map (CS2 install) */
+
+/** Where the CS2 install is and which maps it has. Browser mode: only the fixture map (if exported) is "available". */
+export async function cs2Status(mapHint?: string): Promise<Cs2Status> {
+  if (isTauri()) return await invoke<Cs2Status>("cs2_status");
+  const maps: string[] = [];
+  if (mapHint) {
+    try {
+      const r = await fetch(`/fixtures/map_${mapHint}.glb`, { method: "HEAD" });
+      if (r.ok) maps.push(mapHint);
+    } catch {
+      /* offline */
+    }
+  }
+  return { found: maps.length > 0, path: maps.length ? "/fixtures" : null, source: maps.length ? "auto" : null, maps, error: maps.length ? null : "Tarayıcı modu: örnek harita dosyası yok" };
+}
+
+export async function setCs2Path(path: string | null): Promise<Cs2Status> {
+  return await invoke<Cs2Status>("set_cs2_path", { path });
+}
+
+export async function pickCs2Folder(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const r = await openDialog({ multiple: false, directory: true, title: "Counter-Strike 2 klasörünü seçin (…/Counter-Strike Global Offensive)" });
+  if (!r) return null;
+  return Array.isArray(r) ? (r[0] ?? null) : r;
+}
+
+/** The real map as binary glTF. Throws a Turkish message when unavailable. */
+export async function getMapScene(mapName: string, quality: MapQuality, textures: "ktx2" | "image", onProgress?: (p: MapProgress) => void): Promise<ArrayBuffer> {
+  if (isTauri()) {
+    const un = await listen<MapProgress>("map-progress", (e) => onProgress?.(e.payload));
+    try {
+      return toArrayBuffer(await invoke("get_map_scene", { mapName, quality, textures }));
+    } finally {
+      un();
+    }
+  }
+  onProgress?.({ map: mapName, stage: "Örnek harita indiriliyor", pct: 0.2 });
+  const r = await fetch(`/fixtures/map_${mapName}.glb`);
+  if (!r.ok) throw new Error(`Bu harita için örnek dosya yok (map_${mapName}.glb)`);
+  const b = await r.arrayBuffer();
+  onProgress?.({ map: mapName, stage: "Örnek harita indirildi", pct: 0.6 });
+  return b;
 }

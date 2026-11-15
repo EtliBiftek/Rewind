@@ -23,6 +23,9 @@ struct Inner {
 struct AppState {
     inner: Mutex<Inner>,
     library: Mutex<Option<LineupLibrary>>,
+    /// One map export at a time (a second request for the same map then hits the cache).
+    /// (held only inside `spawn_blocking`)
+    map_export: Mutex<()>,
 }
 
 #[derive(Clone, Serialize)]
@@ -199,6 +202,142 @@ fn library_stats(app: AppHandle, state: State<'_, AppState>) -> LibraryStats {
     with_library(&app, &state, |lib| lib.stats())
 }
 
+// ------------------------------------------------------------------ real map (CS2 install)
+
+#[derive(Serialize, serde::Deserialize, Default)]
+struct Cs2Config {
+    /// User-chosen CS2 folder (anything `resolve_user_path` accepts); None = automatic discovery.
+    path: Option<String>,
+}
+
+fn cs2_config_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("cs2.json"))
+}
+
+fn read_cs2_config(app: &AppHandle) -> Cs2Config {
+    cs2_config_path(app)
+        .and_then(|p| std::fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// The `game/csgo` folder to use and where it came from ("manual" | "auto").
+fn cs2_dir(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
+    if let Some(p) = read_cs2_config(app).path {
+        return match rewind_assets::steam::resolve_user_path(Path::new(&p)) {
+            Some(d) => Ok((d, "manual")),
+            None => Err(rewind_assets::Error::NotCs2(PathBuf::from(p)).to_string()),
+        };
+    }
+    rewind_assets::steam::discover().map(|d| (d, "auto")).ok_or_else(|| rewind_assets::Error::NotFound.to_string())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Cs2Status {
+    found: bool,
+    path: Option<String>,
+    source: Option<&'static str>,
+    maps: Vec<String>,
+    error: Option<String>,
+}
+
+fn cs2_status_of(app: &AppHandle) -> Cs2Status {
+    match cs2_dir(app) {
+        Ok((d, source)) => Cs2Status {
+            found: true,
+            maps: rewind_assets::Game::list_maps(&d).into_iter().map(|m| m.name).collect(),
+            path: Some(d.to_string_lossy().into_owned()),
+            source: Some(source),
+            error: None,
+        },
+        Err(e) => Cs2Status { found: false, path: read_cs2_config(app).path, source: None, maps: Vec::new(), error: Some(e) },
+    }
+}
+
+#[tauri::command]
+async fn cs2_status(app: AppHandle) -> Cs2Status {
+    tauri::async_runtime::spawn_blocking(move || cs2_status_of(&app)).await.unwrap_or(Cs2Status {
+        found: false,
+        path: None,
+        source: None,
+        maps: Vec::new(),
+        error: Some("Durum okunamadı".into()),
+    })
+}
+
+/// Sets (or with `null` clears) the manual CS2 folder. Rejects folders that are not an install.
+#[tauri::command]
+async fn set_cs2_path(app: AppHandle, path: Option<String>) -> Result<Cs2Status, String> {
+    if let Some(p) = &path {
+        if rewind_assets::steam::resolve_user_path(Path::new(p)).is_none() {
+            return Err(rewind_assets::Error::NotCs2(PathBuf::from(p)).to_string());
+        }
+    }
+    let cfg = cs2_config_path(&app).ok_or("Ayar klasörü bulunamadı")?;
+    if let Some(d) = cfg.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("Ayar kaydedilemedi: {e}"))?;
+    }
+    let body = serde_json::to_vec_pretty(&Cs2Config { path }).map_err(|e| e.to_string())?;
+    std::fs::write(&cfg, body).map_err(|e| format!("Ayar kaydedilemedi: {e}"))?;
+    Ok(tauri::async_runtime::spawn_blocking(move || cs2_status_of(&app)).await.map_err(|e| e.to_string())?)
+}
+
+#[derive(Clone, Serialize)]
+struct MapProgress {
+    map: String,
+    stage: String,
+    pct: f32,
+}
+
+/// `de_mirage`, `workshop/123/de_x` -> `de_x`
+fn bare_map_name(m: &str) -> String {
+    m.rsplit(['/', '\\']).next().unwrap_or(m).trim().to_ascii_lowercase()
+}
+
+/// The real map as binary glTF (raw bytes), exported from the CS2 install on first use and
+/// cached in the app cache dir afterwards. Emits `map-progress`.
+#[tauri::command]
+async fn get_map_scene(app: AppHandle, map_name: String, quality: String, textures: Option<String>) -> Result<Response, String> {
+    let map = bare_map_name(&map_name);
+    let quality = rewind_assets::Quality::parse(&quality).unwrap_or(rewind_assets::Quality::Medium);
+    let textures = match textures.as_deref() {
+        Some("image") => rewind_assets::TexFormat::Image,
+        _ => rewind_assets::TexFormat::Ktx2,
+    };
+    let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("maps");
+    let app2 = app.clone();
+    let res = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let st = app2.state::<AppState>();
+        let _guard = st.map_export.lock().unwrap_or_else(|e| e.into_inner());
+        let (dir, _) = cs2_dir(&app2)?;
+        let game = rewind_assets::Game::open(&dir).map_err(|e| e.to_string())?;
+        let opts = rewind_assets::ExportOptions { quality, textures, entity_props: true };
+        let last = Mutex::new((Instant::now() - Duration::from_secs(1), -1.0f32));
+        let map2 = map.clone();
+        let progress = |stage: &str, pct: f32| {
+            let mut le = last.lock().unwrap_or_else(|e| e.into_inner());
+            if pct >= 1.0 || pct - le.1 >= 0.02 || le.0.elapsed() > Duration::from_millis(200) {
+                *le = (Instant::now(), pct);
+                let _ = app2.emit("map-progress", MapProgress { map: map2.clone(), stage: stage.to_string(), pct: pct.clamp(0.0, 1.0) });
+            }
+        };
+        let t0 = Instant::now();
+        let scene = rewind_assets::cache::get_or_export(&game, &cache_dir, &map, &opts, &progress).map_err(|e| e.to_string())?;
+        eprintln!(
+            "[rewind] map {map} {} {} bytes in {} ms ({})",
+            quality.as_str(),
+            scene.glb.len(),
+            t0.elapsed().as_millis(),
+            if scene.from_cache { "cache" } else { "exported" }
+        );
+        Ok(scene.glb)
+    })
+    .await
+    .map_err(|e| format!("Harita iş parçacığı hatası: {e}"))??;
+    Ok(Response::new(res))
+}
+
 /// A `.dem` path passed on the command line (file association / "open with"), if any.
 #[tauri::command]
 fn initial_demo() -> Option<String> {
@@ -269,7 +408,17 @@ pub fn run() {
             Ok(())
         })
         .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![load_demo, get_frames, get_voice_pcm, write_file, library_stats, initial_demo])
+        .invoke_handler(tauri::generate_handler![
+            load_demo,
+            get_frames,
+            get_voice_pcm,
+            write_file,
+            library_stats,
+            initial_demo,
+            cs2_status,
+            set_cs2_path,
+            get_map_scene
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Rewind");
 }
@@ -283,5 +432,11 @@ mod tests {
         assert_eq!(header_path("/tmp/%C3%B6rnek.mp4"), "/tmp/örnek.mp4");
         // ASCII path that merely contains a percent sign stays untouched
         assert_eq!(header_path("/tmp/100%25.mp4"), "/tmp/100%25.mp4");
+    }
+    #[test]
+    fn map_names() {
+        assert_eq!(bare_map_name("de_mirage"), "de_mirage");
+        assert_eq!(bare_map_name("workshop/123/De_X"), "de_x");
+        assert_eq!(bare_map_name("maps\\de_ancient"), "de_ancient");
     }
 }

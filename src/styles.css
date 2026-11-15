@@ -298,3 +298,20 @@ table.cmp th.red { color: #ff8a8a; } table.cmp th.green { color: var(--good); } 
 dl.keys { margin: 0; display: grid; gap: 6px; } dl.keys > div { display: grid; grid-template-columns: 150px 1fr; align-items: center; } dl.keys dd { margin: 0; color: #b9c6da; } kbd { font: 600 11px var(--mono); background: var(--panel3); border: 1px solid var(--border2); border-bottom-width: 2px; border-radius: 5px; padding: 2px 7px; }
 
 .view3d .viewbar { left: auto; right: 8px; justify-content: flex-end; max-width: calc(100% - 262px); }
+
+/* real map (CS2 install) */
+.view3d .viewbar .grow { flex: 1; }
+.map-notice { position: absolute; right: 10px; top: 10px; z-index: 6; display: flex; align-items: center; gap: 8px; max-width: min(720px, 90%); padding: 6px 8px 6px 12px; border-radius: 8px; font-size: 12px; background: rgba(10,16,26,0.86); border: 1px solid var(--border2); color: #c9d5e6; backdrop-filter: blur(4px); }
+.map-notice.warn { border-color: rgba(255,204,77,0.45); }
+.map-notice.warn span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-notice .spin { width: 12px; height: 12px; border: 2px solid #2a3a52; border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; flex: none; }
+.map-settings { position: absolute; right: 8px; bottom: 46px; z-index: 7; width: 300px; padding: 10px 12px; border-radius: 8px; background: rgba(12,18,28,0.96); border: 1px solid var(--border2); font-size: 12px; color: #c9d5e6; display: flex; flex-direction: column; gap: 9px; box-shadow: 0 8px 30px rgba(0,0,0,0.45); }
+.map-settings .ms-head { display: flex; align-items: center; justify-content: space-between; }
+.map-settings .seg button { flex: 1; height: 26px; border-radius: 6px; background: var(--panel2); border: 1px solid var(--border2); color: #b9c6da; font-size: 12px; }
+.map-settings .seg button.on { background: rgba(53,208,186,0.16); border-color: rgba(53,208,186,0.55); color: #8ff0e0; }
+.map-settings .seg { display: flex; width: 100%; flex-wrap: nowrap; }
+.map-settings .ms-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.map-settings .ms-row.col { flex-direction: column; align-items: flex-start; gap: 3px; }
+.map-settings code { font-size: 11px; color: #9fb3cc; word-break: break-all; }
+.map-settings .ms-err { color: #ffb4b4; font-size: 11.5px; }
+.map-settings .small { font-size: 11px; line-height: 1.4; }

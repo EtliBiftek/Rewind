@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 /* Rewind frontend end-to-end check (Playwright + Chromium, browser fixture mode).
- *   node scripts/e2e.cjs [--final] [--no-build] [--quick] [--variant mock|two|unknown|novoice] [--out DIR]
+ *   node scripts/e2e.cjs [--final] [--no-build] [--quick] [--variant mock|two|unknown|novoice] [--out DIR] [--map-glb FILE]
+ * Real map: public/fixtures/map_<map>.glb (exported from a CS2 install with `rewind-cli map-export`) or --map-glb FILE is
+ * served for the demo's map. Without either, the tiny real CS2 map package of the ValveResourceFormat test corpus
+ * (testdata/vrf/small_map_with_material.vpk, "nametag") is exported and served instead, which exercises the whole
+ * load path but obviously is not the demo's map.
  * (no variant = whatever is in public/fixtures; mock variants are generated into /tmp and served via request interception)
  * --final : 1600x900 @2x screenshots of the main views into ./renders
  */
@@ -83,8 +87,34 @@ function makePng(w, h, paint) {
       else route.fulfill({ status: 404, body: "nope" });
     });
   }
+  // ---- real map glb for the demo's map
+  const demoMap = (() => { try { const d = JSON.parse(fs.readFileSync(path.join(fixtureDir, "demo.json"), "utf8")); return (d.header.mapName || d.map.name).split(/[\\/]/).pop().toLowerCase(); } catch { return "de_mirage"; } })();
+  let mapGlb = opt("map-glb", "");
+  let mapGlbKind = "fixture";
+  if (!mapGlb && fs.existsSync(path.join(ROOT, `public/fixtures/map_${demoMap}.glb`))) mapGlb = path.join(ROOT, `public/fixtures/map_${demoMap}.glb`);
+  if (!mapGlb) {
+    const vpk = path.join(ROOT, "testdata/vrf/small_map_with_material.vpk");
+    const cli = path.join(ROOT, "target/release/rewind-cli");
+    const cliDbg = path.join(ROOT, "target/debug/rewind-cli");
+    const bin = [cli, cliDbg].filter((f) => fs.existsSync(f)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0] || null;
+    if (fs.existsSync(vpk) && bin) {
+      const fake = "/tmp/rewind-e2e-fakecs2/game/csgo";
+      fs.mkdirSync(path.join(fake, "maps"), { recursive: true });
+      fs.writeFileSync(path.join(fake, "gameinfo.gi"), "");
+      fs.copyFileSync(vpk, path.join(fake, "maps/nametag.vpk"));
+      mapGlb = "/tmp/rewind-e2e-nametag.glb";
+      execFileSync(bin, ["map-export", "nametag", "--cs2", fake, "--out", mapGlb], { stdio: "ignore" });
+      mapGlbKind = "substitute (VRF corpus 'nametag' CS2 package)";
+    }
+  }
+  let mapMode = "serve";
+  log(`real map: ${demoMap} <- ${mapGlb || "(none: fallback only)"} [${mapGlbKind}]`);
+  await ctx.route("**/fixtures/map_*.glb", (route) => {
+    if (mapMode === "missing" || !mapGlb) return route.fulfill({ status: 404, body: "nope" });
+    route.fulfill({ body: fs.readFileSync(mapGlb), contentType: "model/gltf-binary" });
+  });
   const page = await ctx.newPage();
-  page.on("console", (m) => { if (m.type() === "error") consoleErrors.push(m.text()); });
+  page.on("console", (m) => { if (m.type() === "error" && !/\/fixtures\/map_[^/]*\.glb/.test(m.location()?.url || "")) consoleErrors.push(m.text()); });
   page.on("pageerror", (e) => consoleErrors.push("pageerror: " + e.message));
   const shot = async (name) => { await page.waitForTimeout(FINAL ? 3500 : 350); await page.evaluate(() => (window.__freeze = true)); try { await page.screenshot({ path: path.join(OUT, name + ".png"), timeout: 120000 }); } finally { await page.evaluate(() => (window.__freeze = false)); } };
   const st = () => page.evaluate(() => { const r = window.__rewind; const s = r.useStore.getState(); return { phase: s.phase, tick: r.clock.tick, playing: s.playing, selected: s.selected, tab: s.tab, viewMode: s.viewMode, cam: s.cam, range: s.range, speed: r.clock.speed, round: s.match ? s.match.roundIndexAt(r.clock.tick) : -1 }; });
@@ -227,6 +257,57 @@ function makePng(w, h, paint) {
     await page.keyboard.down("w"); await page.waitForTimeout(500); await page.keyboard.up("w");
     const p1 = await page.evaluate(() => JSON.stringify(window.__scene3d.camera.position));
     assert(p0 !== p1, "free-fly W moves camera");
+    await clickText("Birinci şahıs", ".view3d .viewbar");
+  });
+
+  const mapState = () => page.evaluate(() => window.__rewind.useStore.getState().mapState);
+  const reloadMap = () => page.evaluate(() => { const s = window.__rewind.useStore; s.setState({ realMap: true, mapReload: s.getState().mapReload + 1 }); });
+  await step("real map: missing map file -> notice + reconstructed floor fallback", async () => {
+    await setS({ viewMode: "3d", cam: "pov" });
+    mapMode = "missing";
+    await page.evaluate(() => { window.__scene3d.setRealMap(null); window.__forgetRealMaps(); });
+    await reloadMap();
+    await page.waitForFunction(() => window.__rewind.useStore.getState().mapState.status === "fallback", null, { timeout: 30000 });
+    const t = await page.locator("[data-testid=map-fallback]").innerText();
+    assert(/Basit görünüm/.test(t), "fallback notice: " + t);
+    const st = await page.evaluate(() => ({ real: !!window.__scene3d.realMap, floor: window.__scene3d.floorGroup.visible }));
+    assert(!st.real && st.floor, "floor shown " + JSON.stringify(st));
+    const s = await canvasStats(".view3d canvas:not(.overlay)");
+    assert(s && s.colors > 8, "fallback renders " + JSON.stringify(s));
+    await shot("3d-map-fallback");
+    mapMode = "serve";
+  });
+  if (mapGlb) await step("real map: loads, replaces the floor, every camera, settings, toggle", async () => {
+    await reloadMap();
+    const t0 = Date.now();
+    await page.waitForFunction(() => ["ready", "fallback"].includes(window.__rewind.useStore.getState().mapState.status), null, { timeout: 120000 });
+    const ms = await mapState();
+    assert(ms.status === "ready", "map ready: " + JSON.stringify(ms));
+    log(`       real map ready in ${Date.now() - t0} ms: ${ms.info}`);
+    const st = await page.evaluate(() => { const s = window.__scene3d; let n = 0; s.realMap.root.traverse((o) => o.isMesh && n++); return { map: s.realMap.extras.map, floor: s.floorGroup.visible, meshes: n, shadows: s.renderer.shadowMap.enabled, tone: s.renderer.toneMapping }; });
+    assert(!st.floor && st.meshes > 0 && st.shadows && st.tone > 0, "real map in scene " + JSON.stringify(st));
+    for (const [k, label] of [["pov", "Birinci şahıs"], ["chase", "Takip"], ["free", "Serbest"], ["top", "Üstten"]]) {
+      await clickText(label, ".view3d .viewbar");
+      await page.waitForTimeout(500);
+      const s = await canvasStats(".view3d canvas:not(.overlay)");
+      assert(s && s.colors > 8, `real-map ${k} has content ` + JSON.stringify(s));
+      await shot(`3d-realmap-${k}`);
+    }
+    await page.locator("[data-testid=map-settings-btn]").click();
+    await page.waitForSelector("[data-testid=map-settings]");
+    const info = await page.locator("[data-testid=map-info]").innerText();
+    assert(/üçgen/.test(info), "stats in settings: " + info);
+    await shot("3d-realmap-settings");
+    await page.locator("[data-testid=map-settings] >> text=Basit görünüm").click();
+    await page.waitForFunction(() => window.__rewind.useStore.getState().mapState.status === "off");
+    assert(await page.evaluate(() => window.__scene3d.floorGroup.visible && !window.__scene3d.realMap), "simple view restores the floor");
+    const t1 = Date.now();
+    await page.locator("[data-testid=map-settings] >> text=Gerçek harita").click();
+    await page.waitForFunction(() => window.__rewind.useStore.getState().mapState.status === "ready", null, { timeout: 30000 });
+    const again = Date.now() - t1;
+    assert(again < 2000, "cached toggle back < 2 s: " + again);
+    assert(await page.evaluate(() => localStorage.getItem("rewind.realMap") === "1"), "setting persisted");
+    await page.locator("[data-testid=map-settings] .ibtn").click();
     await clickText("Birinci şahıs", ".view3d .viewbar");
   });
 
