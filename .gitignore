@@ -1,0 +1,9 @@
+node_modules/
+dist/
+target/
+public/fixtures/
+testdata/
+*.dem
+.DS_Store
+public/wasm/
+dist-web/

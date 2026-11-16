@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Rewind",
+  "version": "0.1.0",
+  "identifier": "com.rewind.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Rewind",
+        "width": 1600,
+        "height": 900,
+        "minWidth": 1100,
+        "minHeight": 650,
+        "resizable": true,
+        "center": true,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Utility",
+    "shortDescription": "CS2 demo viewer and analyzer",
+    "longDescription": "Watch Counter-Strike 2 demos without the game: 2D/3D replay, timeline, voice and offline analysis.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper" }
+    },
+    "fileAssociations": [
+      {
+        "ext": ["dem"],
+        "name": "CS2 Demo",
+        "description": "Counter-Strike 2 demo",
+        "role": "Viewer"
+      }
+    ]
+  }
+}
