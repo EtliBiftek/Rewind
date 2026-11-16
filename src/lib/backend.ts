@@ -200,3 +200,14 @@ export async function getMapScene(mapName: string, quality: MapQuality, textures
   onProgress?.({ map: mapName, stage: "Örnek harita indirildi", pct: 0.6 });
   return b;
 }
+
+/**
+ * A CS2 agent / weapon model (skinned GLB in Source space) or an animation resource (its KV3 data as JSON) from the user's
+ * install. Browser mode: `/fixtures/actors/<path>` (made by `cargo run --example actor_fixtures`). Throws when unavailable.
+ */
+export async function getActorAsset(path: string, textures: "ktx2" | "image"): Promise<ArrayBuffer> {
+  if (isTauri()) return toArrayBuffer(await invoke("get_actor_asset", { path, textures }));
+  const r = await fetch(`/fixtures/actors/${path}`);
+  if (!r.ok) throw new Error(`Örnek dosya yok: ${path}`);
+  return r.arrayBuffer();
+}

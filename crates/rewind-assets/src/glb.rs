@@ -15,6 +15,9 @@ pub struct GlbBuilder {
     pub samplers: Vec<Value>,
     pub extensions_used: Vec<String>,
     pub extensions_required: Vec<String>,
+    pub skins: Vec<Value>,
+    /// Scene root nodes (default: every node).
+    pub roots: Option<Vec<usize>>,
 }
 
 pub const ARRAY_BUFFER: u32 = 34962;
@@ -45,6 +48,8 @@ impl GlbBuilder {
             samplers: Vec::new(),
             extensions_used: Vec::new(),
             extensions_required: Vec::new(),
+            skins: Vec::new(),
+            roots: None,
         }
     }
 
@@ -98,7 +103,7 @@ impl GlbBuilder {
     }
 
     pub fn finish(mut self, scene_extras: Value, generator: &str) -> Vec<u8> {
-        let node_ids: Vec<usize> = (0..self.nodes.len()).collect();
+        let node_ids: Vec<usize> = self.roots.take().unwrap_or_else(|| (0..self.nodes.len()).collect());
         while !self.bin.len().is_multiple_of(4) {
             self.bin.push(0);
         }
@@ -112,6 +117,9 @@ impl GlbBuilder {
             "bufferViews": self.buffer_views,
             "buffers": [ { "byteLength": self.bin.len() } ],
         });
+        if !self.skins.is_empty() {
+            doc["skins"] = json!(self.skins);
+        }
         if !self.materials.is_empty() {
             doc["materials"] = json!(self.materials);
         }

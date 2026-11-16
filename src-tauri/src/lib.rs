@@ -338,6 +338,28 @@ async fn get_map_scene(app: AppHandle, map_name: String, quality: String, textur
     Ok(Response::new(res))
 }
 
+/// An agent / weapon model (skinned GLB, Source space) or an animation resource (KV3 as JSON) of
+/// the CS2 install, for the in-game look of the 3D view. Cached in the app cache dir.
+#[tauri::command]
+async fn get_actor_asset(app: AppHandle, path: String, textures: Option<String>) -> Result<Response, String> {
+    if !rewind_assets::actors::allowed(&path) {
+        return Err(format!("İzin verilmeyen dosya: {path}"));
+    }
+    let tex = match textures.as_deref() {
+        Some("image") => rewind_assets::TexFormat::Image,
+        _ => rewind_assets::TexFormat::Ktx2,
+    };
+    let cache_dir = app.path().app_cache_dir().map_err(|e| e.to_string())?.join("actors");
+    let res = tauri::async_runtime::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let (dir, _) = cs2_dir(&app)?;
+        let game = rewind_assets::Game::open(&dir).map_err(|e| e.to_string())?;
+        rewind_assets::actors::get_or_export(&game, &cache_dir, &path, tex, 1024).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Model iş parçacığı hatası: {e}"))??;
+    Ok(Response::new(res))
+}
+
 /// A `.dem` path passed on the command line (file association / "open with"), if any.
 #[tauri::command]
 fn initial_demo() -> Option<String> {
@@ -426,7 +448,8 @@ pub fn run() {
             initial_demo,
             cs2_status,
             set_cs2_path,
-            get_map_scene
+            get_map_scene,
+            get_actor_asset
         ])
         .run(tauri::generate_context!())
         .expect("error while running Rewind");

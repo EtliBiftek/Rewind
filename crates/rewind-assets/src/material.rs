@@ -96,7 +96,8 @@ pub fn from_material(path: &str, m: &Material) -> MatInfo {
             .map(|(_, v)| v.clone());
     }
     // engine placeholder textures carry no information
-    if color.as_deref().is_some_and(|c| c.contains("default_color") || c.contains("materials/default/default")) {
+    // (only the engine's own: weapons name their real textures `<gun>_default_color`)
+    if color.as_deref().is_some_and(|c| c.starts_with("materials/default/")) {
         color = None;
     }
     let tint_v = m.vector("g_vColorTint").or_else(|| m.vector("g_vColorTint1")).unwrap_or([1.0, 1.0, 1.0, 1.0]);

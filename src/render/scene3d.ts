@@ -3,6 +3,7 @@ import { FrameFlag, type Grenade, type UtilitySuggestion } from "../lib/contract
 import { GRENADE_COLORS, Match, SIDE_COLOR, grenadeEnd, has, isAlive, newPState, styleLabel, weaponLabel, type PState } from "../lib/model";
 import type { CoachOverlay } from "./draw2d";
 import type { RealMapAsset } from "./realmap";
+import { ViewModel, type ActorLibrary, type Character } from "./actors";
 
 export type CamMode = "pov" | "chase" | "free" | "top";
 export interface FreeCam {
@@ -148,6 +149,13 @@ export class Scene3D {
   private sky: THREE.Mesh | null = null;
   private shadowHalf = 0;
   private clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+  /** The game's agents / weapons / animations (null = stylised players). */
+  actors: ActorLibrary | null = null;
+  private chars = new Map<string, Character>();
+  private vm: ViewModel | null = null;
+  private vmOn = false;
+  private flashes: THREE.Sprite[] = [];
+  private lastNow = 0;
 
   constructor(match: Match, renderer: THREE.WebGLRenderer) {
     this.match = match;
@@ -207,6 +215,32 @@ export class Scene3D {
     this.view.add(arm);
     this.view.visible = false;
     this.camera.add(this.view);
+    for (let i = 0; i < 12; i++) {
+      const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.glowTex, color: 0xffc46a, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
+      sp.visible = false;
+      sc.add(sp);
+      this.flashes.push(sp);
+    }
+  }
+
+  /** Shows the game's own player models and animations (null = back to the stylised players). Shared library, own instances. */
+  setActors(lib: ActorLibrary | null) {
+    for (const c of this.chars.values()) c.dispose();
+    this.chars.clear();
+    this.actors = lib;
+    this.vm = lib ? new ViewModel(lib) : null;
+  }
+
+  private character(slot: number, side: "CT" | "T"): Character | null {
+    if (!this.actors) return null;
+    const k = `${slot}|${side}`;
+    let c = this.chars.get(k);
+    if (!c) {
+      c = this.actors.makeCharacter(side);
+      this.chars.set(k, c);
+      this.scene.add(c.root);
+    }
+    return c;
   }
 
   /** World (Source) -> three coordinates. */
@@ -739,6 +773,9 @@ export class Scene3D {
       this.curRound = ri;
     }
     // ---- players
+    const dt = this.lastNow ? Math.min(0.1, Math.max(0, (opts.now - this.lastNow) / 1000)) : 0;
+    this.lastNow = opts.now;
+    const muzzles: (THREE.Vector3 | null)[] = [];
     for (let s = 0; s < m.pc; s++) {
       const pv = this.players[s];
       const ps = m.sample(tick, s, this.tmp[s]);
@@ -748,6 +785,31 @@ export class Scene3D {
       const col = new THREE.Color(SIDE_COLOR[side]);
       const isPovSelf = spec.mode === "pov" && s === spec.selected && alive;
       pv.group.visible = present && !isPovSelf;
+      muzzles[s] = null;
+      if (this.actors) {
+        pv.group.visible = false;
+        const k0 = !alive ? m.killsByRound[Math.max(0, ri)]?.find((q) => q.victim === s && q.tick <= tick) : undefined;
+        const prev = m.sample(tick - 8, s, this.tmp[15]);
+        const vdt = 8 / tr;
+        for (const sd of ["CT", "T"] as const) {
+          const ch = this.character(s, sd);
+          if (!ch) continue;
+          const mine = sd === side;
+          const pos = k0 ? k0.victimPos : [ps.x, ps.y, ps.z];
+          ch.update(
+            {
+              x: pos[0], y: pos[1], z: pos[2], yaw: ps.yaw, pitch: ps.pitch,
+              vx: alive ? (ps.x - prev.x) / vdt : 0, vy: alive ? (ps.y - prev.y) / vdt : 0,
+              duck: has(ps.flags, FrameFlag.Ducking), walking: has(ps.flags, FrameFlag.Walking), alive,
+              deadFor: k0 ? (tick - k0.tick) / tr : 99, weapon: m.weaponName(ps.weapon), defuser: has(ps.flags, FrameFlag.HasDefuser),
+              visible: mine && present && !isPovSelf && (alive || !!k0),
+            },
+            dt,
+            this.time,
+          );
+          if (mine && alive) muzzles[s] = ch.muzzle;
+        }
+      }
       pv.bodyMat.color.copy(col);
       if (!alive) {
         pv.bodyMat.color.multiplyScalar(0.35);
@@ -788,7 +850,7 @@ export class Scene3D {
       if (pv.tag.visible) this.drawTag(pv, m.players[s].name, ps.health, side, s === spec.selected, opts.speaking.has(s));
       // cross
       const k = !alive ? m.killsByRound[Math.max(0, ri)]?.find((q) => q.victim === s && q.tick <= tick) : undefined;
-      pv.cross.visible = present && !alive && !!k;
+      pv.cross.visible = present && !alive && !!k && !this.actors;
       if (k) {
         Scene3D.v(k.victimPos[0], k.victimPos[1], k.victimPos[2] + 2, pv.cross.position);
         pv.group.position.set(k.victimPos[0], k.victimPos[2] + 8, -k.victimPos[1]);
@@ -886,6 +948,7 @@ export class Scene3D {
 
     // ---- tracers
     let ti = 0;
+    let fi = 0;
     const tmpA = new THREE.Vector3(),
       tmpB = new THREE.Vector3(),
       tmpD = new THREE.Vector3();
@@ -898,12 +961,27 @@ export class Scene3D {
       const yaw = ps.yaw * DEG,
         pit = -ps.pitch * DEG;
       tmpD.set(Math.cos(yaw) * Math.cos(pit), Math.sin(pit), -Math.sin(yaw) * Math.cos(pit));
-      Scene3D.v(ps.x, ps.y, this.eyeOf(ps) - 6, tmpA);
-      tmpA.addScaledVector(tmpD, 30);
+      const mz = muzzles[sh.player];
+      if (mz && !(spec.mode === "pov" && sh.player === spec.selected)) {
+        tmpA.copy(mz);
+        const age = (tick - sh.tick) / tr;
+        if (age < 0.06 && fi < this.flashes.length) {
+          const f = this.flashes[fi++];
+          f.visible = true;
+          f.position.copy(mz);
+          const sz = 26 + this.rnd(sh.tick, 3) * 18;
+          f.scale.set(sz, sz, 1);
+          f.material.opacity = 1 - age / 0.06;
+        }
+      } else {
+        Scene3D.v(ps.x, ps.y, this.eyeOf(ps) - 6, tmpA);
+        tmpA.addScaledVector(tmpD, 30);
+      }
       tmpB.copy(tmpA).addScaledVector(tmpD, 900);
       this.placeTracer(this.tracers[ti++], tmpA, tmpB, 0.85 * (1 - (tick - sh.tick) / win));
     }
     for (; ti < this.tracers.length; ti++) this.tracers[ti].visible = false;
+    for (; fi < this.flashes.length; fi++) this.flashes[fi].visible = false;
 
     // ---- bomb
     const bs = m.bombState(tick);
@@ -939,6 +1017,17 @@ export class Scene3D {
       this.renderer.clippingPlanes = [this.clipPlane];
     } else if (this.renderer.clippingPlanes.length) this.renderer.clippingPlanes = [];
     this.renderer.render(this.scene, this.camera);
+    if (this.vmOn && this.vm) {
+      // first-person arms and weapon over the world, with their own depth
+      const ac = this.renderer.autoClear;
+      this.renderer.autoClear = false;
+      this.renderer.clearDepth();
+      const cp = this.renderer.clippingPlanes;
+      this.renderer.clippingPlanes = [];
+      this.renderer.render(this.vm.scene, this.vm.camera);
+      this.renderer.clippingPlanes = cp;
+      this.renderer.autoClear = ac;
+    }
   }
 
   private gpos(g: Grenade, tick: number): [number, number, number] | null {
@@ -959,6 +1048,7 @@ export class Scene3D {
     const vfov = (hf: number) => (2 * Math.atan(Math.tan((hf * DEG) / 2) / aspect)) / DEG;
     cam.aspect = aspect;
     this.view.visible = false;
+    this.vmOn = false;
     cam.up.set(0, 1, 0);
     let mode = spec.mode;
     if (mode === "pov" && !isAlive(m.sample(tick, spec.selected, this.tmp[13]))) mode = "chase"; // dead: look at the body from behind
@@ -972,6 +1062,21 @@ export class Scene3D {
       cam.lookAt(cam.position.x + Math.cos(yaw) * Math.cos(pit), cam.position.y + Math.sin(pit), cam.position.z - Math.sin(yaw) * Math.cos(pit));
       this.view.visible = isAlive(ps) && !scoped;
       const wn = m.weaponName(ps.weapon);
+      if (this.vm && isAlive(ps) && !scoped) {
+        const prev = m.sample(tick - 8, spec.selected, this.tmp[15]);
+        let shotAge: number | null = null;
+        for (const sh of m.demo.shots ?? []) if (sh.player === spec.selected && sh.tick <= tick && tick - sh.tick < m.tickRate) shotAge = (tick - sh.tick) / m.tickRate;
+        this.vmOn = this.vm.update({
+          side: has(ps.flags, FrameFlag.SideCT) ? "CT" : "T",
+          weapon: wn,
+          shotAge,
+          speed: Math.hypot(ps.x - prev.x, ps.y - prev.y) / (8 / m.tickRate),
+          time: this.time,
+          aspect,
+          sunColor: this.sun.color,
+        });
+        this.view.visible = false; // the game's viewmodel replaces the stand-in (nothing while its clips load)
+      }
       this.viewGun.scale.set(1, 1, /knife|grenade|flash|smoke|molotov|decoy|c4/.test(wn) ? 0.4 : 1);
     } else if (mode === "chase") {
       const ps = m.sample(tick, spec.selected, this.tmp[13]);
@@ -1001,6 +1106,7 @@ export class Scene3D {
   dispose() {
     // the real map's meshes are shared and cached: never free them here
     this.setRealMap(null);
+    this.setActors(null);
     this.clearRoundObjects();
     this.scene.traverse((o) => {
       const mesh = o as THREE.Mesh;
