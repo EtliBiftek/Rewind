@@ -21,12 +21,15 @@ function fixtures(): Plugin {
     res.setHeader("Content-Length", fs.statSync(f).size);
     fs.createReadStream(f).pipe(res);
   };
+  let outDir = "dist";
   return {
     name: "rewind-fixtures",
+    configResolved: (c) => void (outDir = path.resolve(c.root, c.build.outDir)),
     configureServer: (s) => void s.middlewares.use(mw),
     configurePreviewServer: (s) => void s.middlewares.use(mw),
+    // fixtures may hold files exported from a CS2 install: never ship them, whatever the output folder
     closeBundle() {
-      fs.rmSync(path.resolve(import.meta.dirname, "dist/fixtures"), { recursive: true, force: true });
+      fs.rmSync(path.join(outDir, "fixtures"), { recursive: true, force: true });
     },
   };
 }

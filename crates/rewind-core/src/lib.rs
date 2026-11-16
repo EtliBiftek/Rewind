@@ -14,6 +14,7 @@ pub mod voice;
 pub use error::{Error, Result};
 pub use model::DemoData;
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
 /// Human readable (Turkish) label for a progress stage id.
@@ -89,6 +90,7 @@ pub fn load_bytes(
 }
 
 /// Loads a demo file (memory-mapped).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn load_file(path: &Path, opts: &LoadOptions<'_>, progress: &(dyn Fn(&str, f32) + Sync)) -> Result<LoadedDemo> {
     let file = std::fs::File::open(path)?;
     // SAFETY: the file is opened read-only and not modified by us while mapped; if another process

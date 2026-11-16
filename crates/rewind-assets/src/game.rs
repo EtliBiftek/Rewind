@@ -2,13 +2,18 @@
 //! packages `game/csgo/maps/<map>.vpk`.
 
 use crate::Error;
-use heatel::{DirSource, Vpk};
+use heatel::{Source, Vpk};
 use std::path::{Path, PathBuf};
+
+/// Where the install's files are read from: the `game/csgo` folder on disk, or (browser build)
+/// the files the user picked. `Send + Sync` because the export reads in parallel.
+pub type GameSource = Box<dyn Source + Send + Sync>;
 
 /// The `game/csgo` folder of an install with its shared package opened.
 pub struct Game {
+    /// The folder on disk (empty for a non-disk source).
     pub csgo: PathBuf,
-    pub src: DirSource,
+    pub src: GameSource,
     /// `pak01_dir.vpk` (None when absent: maps that pack everything themselves still work).
     pub pak01: Option<Vpk>,
 }
@@ -22,17 +27,24 @@ pub struct MapEntry {
 }
 
 impl Game {
+    #[cfg(any(unix, windows))]
     pub fn open(csgo: &Path) -> Result<Self, Error> {
         if !crate::steam::is_csgo_dir(csgo) {
             return Err(Error::NotCs2(csgo.to_path_buf()));
         }
-        let src = DirSource::new(csgo);
-        let pak01 = if csgo.join("pak01_dir.vpk").is_file() {
-            Some(Vpk::open(&src, "pak01_dir.vpk").map_err(|e| Error::Parse(format!("pak01_dir.vpk: {e}")))?)
+        let mut g = Self::from_source(Box::new(heatel::DirSource::new(csgo)))?;
+        g.csgo = csgo.to_path_buf();
+        Ok(g)
+    }
+
+    /// An install read through `src` (paths relative to `game/csgo`).
+    pub fn from_source(src: GameSource) -> Result<Self, Error> {
+        let pak01 = if src.size("pak01_dir.vpk").is_ok() {
+            Some(Vpk::open(&*src, "pak01_dir.vpk").map_err(|e| Error::Parse(format!("pak01_dir.vpk: {e}")))?)
         } else {
             None
         };
-        Ok(Self { csgo: csgo.to_path_buf(), src, pak01 })
+        Ok(Self { csgo: PathBuf::new(), src, pak01 })
     }
 
     /// Maps that have a package in `maps/` (`de_mirage`, ...), sorted by name. Vanity / preview /
@@ -64,8 +76,8 @@ impl Game {
             return Err(Error::MapNotFound(map.to_string()));
         }
         for rel in [format!("maps/{map}.vpk"), format!("maps/{map}_dir.vpk")] {
-            if self.csgo.join(&rel).is_file() {
-                return Vpk::open(&self.src, &rel).map_err(|e| Error::Parse(format!("{rel}: {e}")));
+            if self.src.size(&rel).is_ok() {
+                return Vpk::open(&*self.src, &rel).map_err(|e| Error::Parse(format!("{rel}: {e}")));
             }
         }
         Err(Error::MapNotFound(map.to_string()))
@@ -100,7 +112,7 @@ impl Files<'_> {
         for vpk in pkgs {
             for q in [&p, &lower] {
                 if vpk.get(q).is_some() {
-                    if let Ok(b) = vpk.read_file(&self.game.src, q) {
+                    if let Ok(b) = vpk.read_file(&*self.game.src, q) {
                         return Some(b);
                     }
                 }

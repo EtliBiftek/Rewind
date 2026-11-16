@@ -13,6 +13,7 @@ doctest = false
 warnings = "allow"
 
 [dependencies]
+web-time = "1"
 bitter = "0.7.0"
 prost = "0.13.3"
 snap = "1.1.0"

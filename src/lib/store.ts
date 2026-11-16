@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { Cs2Status, DemoData, MapQuality, Vec3 } from "./contract";
 import { Match } from "./model";
 import { clock } from "./clock";
-import { getFrames, loadDemoFromPath, loadFixtureDemo, isTauri } from "./backend";
+import { getFrames, loadDemoFromFile, loadDemoFromPath, loadFixtureDemo, isTauri } from "./backend";
 
 export type Tab = "watch" | "analysis" | "player";
 export type AnalysisTab = "scoreboard" | "matrix" | "insights" | "coach";
@@ -81,6 +81,8 @@ export interface Store {
   mapReload: number;
   set: (p: Partial<Store>) => void;
   openPath: (path: string) => Promise<void>;
+  /** Web version: a picked or dropped file. */
+  openFile: (file: File) => Promise<void>;
   openFixtures: () => Promise<void>;
   select: (slot: number) => void;
   jumpToRound: (idx: number) => void;
@@ -162,6 +164,15 @@ export const useStore = create<Store>((set, get) => ({
     set({ phase: "loading", error: null, progress: { stage: "Demo okunuyor", pct: 0 } });
     try {
       const demo = await loadDemoFromPath(path, (p) => set({ progress: p }));
+      await finishLoad(demo, set, (stage, pct) => set({ progress: { stage, pct } }));
+    } catch (e) {
+      set({ phase: "error", error: String((e as any)?.message ?? e) });
+    }
+  },
+  openFile: async (file) => {
+    set({ phase: "loading", error: null, progress: { stage: "Demo okunuyor", pct: 0 } });
+    try {
+      const demo = await loadDemoFromFile(file, (p) => set({ progress: p }));
       await finishLoad(demo, set, (stage, pct) => set({ progress: { stage, pct } }));
     } catch (e) {
       set({ phase: "error", error: String((e as any)?.message ?? e) });

@@ -353,38 +353,49 @@ pub fn extract(bytes: &[u8], progress: &(dyn Fn(&str, f32) + Sync)) -> Result<Ra
 
     // Running the passes concurrently is slower in practice (each pass is already multi-threaded
     // and memory-bandwidth bound), so they run one after another unless REWIND_PARALLEL is set.
-    let seq = std::env::var("REWIND_PARALLEL").is_err();
-    let (ev_out, tick_out, proj_out) = std::thread::scope(|s| {
-        let h_ev = s.spawn(|| {
-            let mut props: Vec<&str> = EVENT_PLAYER_PROPS.to_vec();
-            props.dedup();
-            let t = std::time::Instant::now();
-            let r = run_parser(bytes, make_inputs(&huf, &props, WANTED_EVENTS, vec![], false));
-            if std::env::var("REWIND_TIMING").is_ok() { eprintln!("events pass {:?}", t.elapsed()); }
-            progress("events", 0.35);
-            r
-        });
-        if seq { while !h_ev.is_finished() { std::thread::sleep(std::time::Duration::from_millis(5)); } }
-        let h_tick = s.spawn(|| {
-            let t = std::time::Instant::now();
-            let r = run_parser(bytes, make_inputs(&huf, TICK_PROPS, &[], sampled(0), false));
-            if std::env::var("REWIND_TIMING").is_ok() { eprintln!("ticks pass {:?}", t.elapsed()); }
-            progress("positions", 0.55);
-            r
-        });
-        if seq { while !h_tick.is_finished() { std::thread::sleep(std::time::Duration::from_millis(5)); } }
-        let h_proj = s.spawn(|| {
-            let t = std::time::Instant::now();
-            let r = run_parser(bytes, make_inputs(&huf, &[], &[], vec![], true));
-            if std::env::var("REWIND_TIMING").is_ok() { eprintln!("proj pass {:?}", t.elapsed()); }
-            progress("grenades", 0.65);
-            r
-        });
-        let j = |h: std::thread::ScopedJoinHandle<'_, Result<DemoOutput>>| {
-            h.join().unwrap_or_else(|_| Err(Error::Parse("parser thread panicked".into())))
-        };
-        (j(h_ev), j(h_tick), j(h_proj))
-    });
+    let ev = || {
+        let mut props: Vec<&str> = EVENT_PLAYER_PROPS.to_vec();
+        props.dedup();
+        let t = web_time::Instant::now();
+        let r = run_parser(bytes, make_inputs(&huf, &props, WANTED_EVENTS, vec![], false));
+        if std::env::var("REWIND_TIMING").is_ok() { eprintln!("events pass {:?}", t.elapsed()); }
+        progress("events", 0.35);
+        r
+    };
+    let tick = || {
+        let t = web_time::Instant::now();
+        let r = run_parser(bytes, make_inputs(&huf, TICK_PROPS, &[], sampled(0), false));
+        if std::env::var("REWIND_TIMING").is_ok() { eprintln!("ticks pass {:?}", t.elapsed()); }
+        progress("positions", 0.55);
+        r
+    };
+    let proj = || {
+        let t = web_time::Instant::now();
+        let r = run_parser(bytes, make_inputs(&huf, &[], &[], vec![], true));
+        if std::env::var("REWIND_TIMING").is_ok() { eprintln!("proj pass {:?}", t.elapsed()); }
+        progress("grenades", 0.65);
+        r
+    };
+    // the browser build has no threads: one pass after another
+    #[cfg(target_arch = "wasm32")]
+    let (ev_out, tick_out, proj_out) = (ev(), tick(), proj());
+    #[cfg(not(target_arch = "wasm32"))]
+    let (ev_out, tick_out, proj_out) = {
+        // Running the passes concurrently is slower in practice (each pass is already multi-threaded
+        // and memory-bandwidth bound), so they run one after another unless REWIND_PARALLEL is set.
+        let seq = std::env::var("REWIND_PARALLEL").is_err();
+        std::thread::scope(|s| {
+            let h_ev = s.spawn(ev);
+            if seq { while !h_ev.is_finished() { std::thread::sleep(std::time::Duration::from_millis(5)); } }
+            let h_tick = s.spawn(tick);
+            if seq { while !h_tick.is_finished() { std::thread::sleep(std::time::Duration::from_millis(5)); } }
+            let h_proj = s.spawn(proj);
+            let j = |h: std::thread::ScopedJoinHandle<'_, Result<DemoOutput>>| {
+                h.join().unwrap_or_else(|_| Err(Error::Parse("parser thread panicked".into())))
+            };
+            (j(h_ev), j(h_tick), j(h_proj))
+        })
+    };
 
     let mut ev_out = ev_out?;
     let mut tick_out = tick_out?;

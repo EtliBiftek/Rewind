@@ -15,7 +15,7 @@ use rayon::prelude::*;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Instant;
+use web_time::Instant;
 
 /// Bump when the produced scene changes for the same input (invalidates caches).
 pub const EXPORT_REV: u32 = 4;

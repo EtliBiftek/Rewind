@@ -2,6 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import type { Cs2Status, DemoData, LibraryStats, MapProgress, MapQuality } from "./contract";
+import { isWeb, webActorAsset, webCs2Status, webForgetCs2, webFrames, webLoadDemo, webMapScene, webVoice } from "./web";
+
+export { isWeb };
 
 export interface Progress {
   stage: string;
@@ -36,6 +39,11 @@ export async function loadDemoFromPath(path: string, onProgress: (p: Progress) =
   }
 }
 
+/** Web version: parse a picked / dropped .dem in the WebAssembly worker. */
+export function loadDemoFromFile(file: File, onProgress: (p: Progress) => void): Promise<DemoData> {
+  return webLoadDemo(file, onProgress);
+}
+
 /** Browser/dev mode: use the exported fixtures. */
 export async function loadFixtureDemo(onProgress: (p: Progress) => void): Promise<DemoData> {
   onProgress({ stage: "Örnek veri yükleniyor", pct: 0.1 });
@@ -46,11 +54,13 @@ export async function loadFixtureDemo(onProgress: (p: Progress) => void): Promis
 
 export async function getFrames(): Promise<ArrayBuffer> {
   if (isTauri()) return toArrayBuffer(await invoke("get_frames"));
+  if (isWeb()) return webFrames();
   return (await fetchOk("/fixtures/frames.bin")).arrayBuffer();
 }
 
 export async function getVoicePcm(steamId: string): Promise<ArrayBuffer> {
   if (isTauri()) return toArrayBuffer(await invoke("get_voice_pcm", { steamId }));
+  if (isWeb()) return webVoice(steamId);
   return (await fetchOk(`/fixtures/voice_${steamId}.bin`)).arrayBuffer();
 }
 
@@ -160,6 +170,7 @@ export async function onFileDrop(cb: (paths: string[]) => void, onHover?: (over:
 /** Where the CS2 install is and which maps it has. Browser mode: only the fixture map (if exported) is "available". */
 export async function cs2Status(mapHint?: string): Promise<Cs2Status> {
   if (isTauri()) return await invoke<Cs2Status>("cs2_status");
+  if (isWeb()) return webCs2Status();
   const maps: string[] = [];
   if (mapHint) {
     try {
@@ -173,6 +184,7 @@ export async function cs2Status(mapHint?: string): Promise<Cs2Status> {
 }
 
 export async function setCs2Path(path: string | null): Promise<Cs2Status> {
+  if (isWeb()) return path === null ? webForgetCs2() : webCs2Status();
   return await invoke<Cs2Status>("set_cs2_path", { path });
 }
 
@@ -193,6 +205,7 @@ export async function getMapScene(mapName: string, quality: MapQuality, textures
       un();
     }
   }
+  if (isWeb()) return webMapScene(mapName, quality, textures, (stage, pct) => onProgress?.({ map: mapName, stage, pct }));
   onProgress?.({ map: mapName, stage: "Örnek harita indiriliyor", pct: 0.2 });
   const r = await fetch(`/fixtures/map_${mapName}.glb`);
   if (!r.ok) throw new Error(`Bu harita için örnek dosya yok (map_${mapName}.glb)`);
@@ -207,6 +220,7 @@ export async function getMapScene(mapName: string, quality: MapQuality, textures
  */
 export async function getActorAsset(path: string, textures: "ktx2" | "image"): Promise<ArrayBuffer> {
   if (isTauri()) return toArrayBuffer(await invoke("get_actor_asset", { path, textures }));
+  if (isWeb()) return webActorAsset(path, textures);
   const r = await fetch(`/fixtures/actors/${path}`);
   if (!r.ok) throw new Error(`Örnek dosya yok: ${path}`);
   return r.arrayBuffer();

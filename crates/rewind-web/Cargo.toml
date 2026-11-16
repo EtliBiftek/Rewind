@@ -1,0 +1,23 @@
+[package]
+name = "rewind-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rewind in the browser: demo parsing and CS2 asset export compiled to WebAssembly (run in a Web Worker)."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rewind-core = { path = "../rewind-core" }
+rewind-assets = { path = "../rewind-assets" }
+serde_json.workspace = true
+wasm-bindgen = "0.2.100"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["File", "Blob", "FileReaderSync"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# rand / ahash randomness in the browser
+getrandom = { version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }

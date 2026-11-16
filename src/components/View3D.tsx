@@ -7,7 +7,8 @@ import { Scene3D, type FreeCam, type TopCam } from "../render/scene3d";
 import { drawOverlay3D } from "../render/hud";
 import { clearCurrentRealMap, loadRealMap, type RealMapAsset } from "../render/realmap";
 import { ActorLibrary, setCurrentActors } from "../render/actors";
-import { cs2Status, isTauri, pickCs2Folder, setCs2Path } from "../lib/backend";
+import { cs2Status, isTauri, isWeb, pickCs2Folder, setCs2Path } from "../lib/backend";
+import { webPickCs2 } from "../lib/web";
 import { persist } from "../lib/store";
 import type { MapQuality } from "../lib/contract";
 
@@ -15,6 +16,15 @@ const QUALITY_LABELS: Record<MapQuality, string> = { low: "Düşük", medium: "O
 
 /** Picks the CS2 folder (Tauri dialog), stores it and returns a Turkish error or null. */
 export async function chooseCs2Folder(): Promise<string | null> {
+  if (isWeb()) {
+    try {
+      const st = await webPickCs2();
+      if (st) useStore.setState({ cs2: st });
+      return null;
+    } catch (e) {
+      return String((e as any)?.message ?? e);
+    }
+  }
   const p = await pickCs2Folder();
   if (!p) return null;
   try {
@@ -41,7 +51,7 @@ function MapNotice() {
     return (
       <div className="map-notice warn" data-testid="map-fallback">
         <span>Basit görünüm: {ms.message}</span>
-        {isTauri() && (
+        {(isTauri() || isWeb()) && (
           <button className="chip" onClick={async () => {
             const err = await chooseCs2Folder();
             if (err) useStore.setState({ mapState: { ...useStore.getState().mapState, message: err } });
@@ -91,7 +101,7 @@ function MapSettings({ onClose }: { onClose: () => void }) {
         <code data-testid="cs2-path">{cs2 ? (cs2.found ? cs2.path : cs2.error ?? "bulunamadı") : "…"}</code>
         {cs2?.found && <span className="muted">{cs2.maps.length} harita</span>}
       </div>
-      {isTauri() && (
+      {(isTauri() || isWeb()) && (
         <div className="ms-row">
           <button className="chip" onClick={async () => setErr(await chooseCs2Folder())}>CS2 klasörünü seç</button>
           {cs2?.source === "manual" && (

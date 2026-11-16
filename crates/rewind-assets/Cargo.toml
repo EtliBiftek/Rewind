@@ -6,6 +6,7 @@ license.workspace = true
 description = "Reads the map geometry, materials and textures of the user's local CS2 install and converts a map to a cached binary glTF scene."
 
 [dependencies]
+web-time = "1"
 heatel = { path = "../vendor/heatel", features = ["serde", "encode"] }
 serde.workspace = true
 serde_json.workspace = true

@@ -251,11 +251,11 @@ impl<'a> SecondPassParser<'a> {
             let ok = match NetMessageType::from(msg_type as i32) {
                 svc_PacketEntities => {
                     if should_parse_entities {
-                        let _pt = prof_on().then(std::time::Instant::now);
+                        let _pt = prof_on().then(web_time::Instant::now);
                         self.parse_packet_ents(msg_bytes, is_fullpacket)?;
                         if let Some(t) = _pt { PROF_ENTS_NS.with(|c| c.set(c.get() + t.elapsed().as_nanos() as u64)); }
                         if !is_fullpacket {
-                            let _ct = prof_on().then(std::time::Instant::now);
+                            let _ct = prof_on().then(web_time::Instant::now);
                             self.collect_entities();
                             if let Some(t) = _ct { PROF_COLLECT_NS.with(|c| c.set(c.get() + t.elapsed().as_nanos() as u64)); }
                         }

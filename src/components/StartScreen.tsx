@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "../lib/store";
-import { initialDemo, isTauri, onFileDrop, pickDemoFile } from "../lib/backend";
+import { initialDemo, isTauri, isWeb, onFileDrop, pickDemoFile } from "../lib/backend";
 import { Icon } from "./icons";
 
 let initialDemoChecked = false;
@@ -13,7 +13,10 @@ export function StartScreen() {
   const openFixtures = useStore((s) => s.openFixtures);
   const [over, setOver] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const openFile = useStore((s) => s.openFile);
   const tauri = isTauri();
+  const web = isWeb();
+  const input = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let un: (() => void) | undefined;
@@ -39,10 +42,11 @@ export function StartScreen() {
 
   // browser mode: auto-load fixtures
   useEffect(() => {
-    if (!tauri && phase === "start" && !new URLSearchParams(location.search).has("manual")) void openFixtures();
-  }, [tauri, phase, openFixtures]);
+    if (!tauri && !web && phase === "start" && !new URLSearchParams(location.search).has("manual")) void openFixtures();
+  }, [tauri, web, phase, openFixtures]);
 
   const pick = async () => {
+    if (web) return input.current?.click();
     const p = await pickDemoFile();
     if (p) void openPath(p);
   };
@@ -70,6 +74,12 @@ export function StartScreen() {
           onDrop={(e) => {
             e.preventDefault();
             setOver(false);
+            const f = [...e.dataTransfer.files].find((x) => /\.dem$/i.test(x.name));
+            if (web) {
+              if (f) void openFile(f);
+              else setMsg("Lütfen bir .dem dosyası bırakın.");
+              return;
+            }
             if (!tauri) setMsg("Tarayıcı modunda dosya okunamaz; örnek veri otomatik yüklenir. Masaüstü uygulamasında .dem dosyasını buraya bırakın.");
           }}
         >
@@ -87,10 +97,24 @@ export function StartScreen() {
               <Icon n="folder" size={34} />
               <b>.dem dosyasını buraya sürükleyip bırakın</b>
               <span className="muted">ya da</span>
-              <button className="btn primary" onClick={pick} disabled={!tauri} title={tauri ? "" : "Dosya seçici yalnızca masaüstü uygulamasında çalışır"}>
+              <button className="btn primary" onClick={pick} disabled={!tauri && !web} title={tauri || web ? "" : "Dosya seçici yalnızca masaüstü uygulamasında çalışır"}>
                 Dosya aç…
               </button>
-              {!tauri && (
+              {web && (
+                <input
+                  ref={input}
+                  type="file"
+                  accept=".dem"
+                  hidden
+                  data-testid="dem-input"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (f) void openFile(f);
+                  }}
+                />
+              )}
+              {!tauri && !web && (
                 <button className="btn" onClick={() => void openFixtures()}>
                   Örnek veriyi yükle
                 </button>
@@ -112,7 +136,7 @@ export function StartScreen() {
           <li>2B harita ve oyun benzeri 3B görünüm</li>
           <li>Oyuncu bazlı zaman çizelgesi, içgörüler ve yardımcı malzeme koçu</li>
           <li>Ses sohbeti, video dışa aktarma</li>
-          <li>Her şey cihazınızda çalışır; ağ bağlantısı gerekmez</li>
+          <li>{web ? "Her şey tarayıcınızda çalışır; demo ve oyun dosyaları hiçbir yere yüklenmez" : "Her şey cihazınızda çalışır; ağ bağlantısı gerekmez"}</li>
         </ul>
       </div>
     </div>

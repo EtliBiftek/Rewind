@@ -4,6 +4,7 @@ members = [
   "crates/rewind-core",
   "crates/rewind-cli",
   "crates/rewind-assets",
+  "crates/rewind-web",
   "crates/vendor/heatel",
   "crates/vendor/cs2-demoparser",
   "crates/vendor/csgoproto",

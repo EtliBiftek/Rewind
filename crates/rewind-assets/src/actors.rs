@@ -34,7 +34,7 @@ impl Game {
         let vpk = self.pak01.as_ref()?;
         for q in [p.clone(), p.to_ascii_lowercase()] {
             if vpk.get(&q).is_some() {
-                if let Ok(b) = vpk.read_file(&self.src, &q) {
+                if let Ok(b) = vpk.read_file(&*self.src, &q) {
                     return Some(b);
                 }
             }
