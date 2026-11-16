@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 /// Bump when the produced scene changes for the same input (invalidates caches).
-pub const EXPORT_REV: u32 = 3;
+pub const EXPORT_REV: u32 = 4;
 
 /// A 3x4 affine transform, rows `[R | t]`, Source space.
 pub type Affine = [[f32; 4]; 3];

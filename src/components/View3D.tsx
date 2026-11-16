@@ -6,6 +6,7 @@ import { useCoachOverlay, useRaf, useSize } from "../lib/hooks";
 import { Scene3D, type FreeCam, type TopCam } from "../render/scene3d";
 import { drawOverlay3D } from "../render/hud";
 import { clearCurrentRealMap, loadRealMap, type RealMapAsset } from "../render/realmap";
+import { ActorLibrary, setCurrentActors } from "../render/actors";
 import { cs2Status, isTauri, pickCs2Folder, setCs2Path } from "../lib/backend";
 import { persist } from "../lib/store";
 import type { MapQuality } from "../lib/contract";
@@ -162,6 +163,8 @@ export function View3D() {
     const map = (match.demo.header.mapName || match.demo.map.name || "").split(/[\\/]/).pop()!.toLowerCase();
     if (!realMap) {
       sc.setRealMap(null);
+      sc.setActors(null);
+      setCurrentActors(null);
       clearCurrentRealMap();
       useStore.setState({ mapState: { status: "off", map, stage: "", pct: 0, message: null, info: null } });
       return;
@@ -178,10 +181,25 @@ export function View3D() {
         const info = `${(st.triangles / 1e6).toFixed(2)} M üçgen · ${st.drawCalls} çizim · ${st.materials} malzeme · ${st.textures} doku (${st.textureMB} MB) · ${st.glbMB} MB · ${st.fetchMs + st.parseMs} ms`;
         useStore.setState({ mapState: { status: "ready", map, stage: "Hazır", pct: 1, message: null, info } });
         (window as any).__realmap = asset;
+        // the game's own player models, weapons and animations (stylised players stay when unavailable)
+        ActorLibrary.load(r, match.demo.frames.weapons ?? [])
+          .then((lib) => {
+            if (!alive || scene.current !== sc) return;
+            sc.setActors(lib);
+            setCurrentActors(lib);
+            (window as any).__actors = lib;
+          })
+          .catch((e) => {
+            if (!alive) return;
+            const ms = useStore.getState().mapState;
+            useStore.setState({ mapState: { ...ms, info: `${ms.info ?? ""} · Oyuncu modelleri yüklenemedi: ${String((e as any)?.message ?? e)}` } });
+          });
       })
       .catch((e) => {
         if (!alive) return;
         sc.setRealMap(null);
+        sc.setActors(null);
+        setCurrentActors(null);
         clearCurrentRealMap();
         useStore.setState({ mapState: { status: "fallback", map, stage: "", pct: 0, message: String((e as any)?.message ?? e), info: null } });
       });

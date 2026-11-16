@@ -9,6 +9,7 @@
 //! (MIT); the world, aggregate, LoD and material rules are ported from Source 2 Viewer
 //! (ValveResourceFormat, MIT). See `NOTICE`.
 
+pub mod actors;
 pub mod cache;
 pub mod export;
 pub mod game;
